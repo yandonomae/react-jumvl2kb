@@ -177,10 +177,23 @@ const RAIL_CONNECTORS = [
 
 const DEFAULT_MODE = 'population'; // population | household | business | analysis
 
+const resolvePublicUrl = (path) => {
+  const baseHref = process.env.PUBLIC_URL
+    ? new URL(
+        process.env.PUBLIC_URL.endsWith('/')
+          ? process.env.PUBLIC_URL
+          : `${process.env.PUBLIC_URL}/`,
+        window.location.href
+      )
+    : new URL('.', window.location.href);
+  const normalizedPath = path.replace(/^\/+/, '');
+  return new URL(normalizedPath, baseHref).toString();
+};
+
 const DEFAULT_DATA_FILES = {
-  shapeZip: `${process.env.PUBLIC_URL}/data/A002005212020DDSWC27211.zip`,
-  populationCsv: `${process.env.PUBLIC_URL}/data/h03_27(茨木_人口).csv`,
-  householdCsv: `${process.env.PUBLIC_URL}/data/h06_01_27(茨木_世帯).csv`,
+  shapeZip: resolvePublicUrl('data/A002005212020DDSWC27211.zip'),
+  populationCsv: resolvePublicUrl('data/h03_27(茨木_人口).csv'),
+  householdCsv: resolvePublicUrl('data/h06_01_27(茨木_世帯).csv'),
 };
 
 // h06（世帯）階層（キー=列名）
