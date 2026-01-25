@@ -12,6 +12,8 @@ import {
 } from 'd3-scale-chromatic';
 import { select } from 'd3-selection';
 import { zoom, zoomIdentity } from 'd3-zoom';
+import { topology } from 'topojson-server';
+import { mesh } from 'topojson-client';
 
 /**
  * 茨木市統計データ可視化システム（ブラウザ完結 / サーバ不要）
@@ -514,6 +516,11 @@ function buildCityNameMap(geojson) {
     if (name && !map.has(code)) map.set(code, name);
   }
   return map;
+}
+
+function getCityCodeFromFeature(feature) {
+  const key = normalizeKeyString(feature?.properties?.KEY_CODE);
+  return key.length >= 5 ? key.slice(0, 5) : '';
 }
 
 function buildRailGeoJson() {
@@ -1320,6 +1327,20 @@ export default function App() {
     }));
   }, [railGeo, pathGen]);
 
+  const cityBoundaryPath = useMemo(() => {
+    if (!pathGen || !displayShapeGeo?.features?.length) return '';
+    const topo = topology({ regions: displayShapeGeo });
+    const boundary = mesh(
+      topo,
+      topo.objects.regions,
+      (a, b) =>
+        a &&
+        b &&
+        getCityCodeFromFeature(a) !== getCityCodeFromFeature(b)
+    );
+    return pathGen(boundary);
+  }, [displayShapeGeo, pathGen]);
+
   const stationPoints = useMemo(() => {
     if (!projection) return [];
     return stations
@@ -1390,6 +1411,16 @@ export default function App() {
                   />
                 );
               })}
+
+              {boldCityBoundary && cityBoundaryPath ? (
+                <path
+                  d={cityBoundaryPath}
+                  fill="none"
+                  stroke="rgba(0,0,0,0.75)"
+                  strokeWidth={1.6 / transform.k}
+                  strokeLinejoin="round"
+                />
+              ) : null}
 
               {/* Rail overlay */}
               {showRail && (
