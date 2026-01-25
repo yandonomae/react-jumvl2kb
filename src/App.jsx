@@ -835,11 +835,11 @@ export default function App() {
   const shapeKeySetAll = useMemo(() => {
     if (!shapeGeo?.features?.length) return null;
     return new Set(
-      shapeGeo.features
+      displayShapeGeo.features
         .map((f) => normalizeKeyString(f?.properties?.KEY_CODE))
         .filter(Boolean)
     );
-  }, [shapeGeo]);
+  }, [displayShapeGeo]);
 
   // --- Initial data load ---
   useEffect(() => {
@@ -1399,8 +1399,12 @@ export default function App() {
                     key={`${k}_${idx}`}
                     d={pathGen(f)}
                     fill={fill}
-                    stroke="rgba(0,0,0,0.35)"
-                    strokeWidth={0.6 / transform.k}
+                    stroke={
+                      boldCityBoundary ? 'rgba(0,0,0,0.75)' : 'rgba(0,0,0,0.35)'
+                    }
+                    strokeWidth={
+                      (boldCityBoundary ? 1.2 : 0.6) / transform.k
+                    }
                     onMouseEnter={(e) => onFeatureEnter(e, f)}
                     onMouseMove={onFeatureMove}
                     onMouseLeave={onFeatureLeave}
