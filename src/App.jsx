@@ -184,7 +184,12 @@ const resolvePublicUrl = (path) => {
 };
 
 const DEFAULT_DATA_FILES = {
-  shapeBase: resolvePublicUrl('data/茨木_地図/r2ka27211'),
+  shapeBases: [
+    resolvePublicUrl('data/茨木_地図/r2ka27211'),
+    resolvePublicUrl('data/高槻_地図/r2ka27207'),
+    resolvePublicUrl('data/吹田_地図/r2ka27205'),
+    resolvePublicUrl('data/豊中_地図/r2ka27203'),
+  ],
   populationCsv: resolvePublicUrl('data/h03_27(茨木_人口).csv'),
   householdCsv: resolvePublicUrl('data/h06_01_27(茨木_世帯).csv'),
 };
@@ -197,6 +202,13 @@ const CITY_CODE_LABELS = {
   '27205': '吹田市',
   '27203': '豊中市',
 };
+
+const MAP_SOURCES = [
+  { code: '27211', label: '茨木市', path: 'data/茨木_地図/r2ka27211' },
+  { code: '27207', label: '高槻市', path: 'data/高槻_地図/r2ka27207' },
+  { code: '27205', label: '吹田市', path: 'data/吹田_地図/r2ka27205' },
+  { code: '27203', label: '豊中市', path: 'data/豊中_地図/r2ka27203' },
+];
 
 // h06（世帯）階層（キー=列名）
 const HOUSEHOLD_HIERARCHY = {
@@ -333,6 +345,34 @@ async function loadShapefileFromUrl(url) {
     throw new Error('GeoJSON変換に失敗しました（featuresがありません）');
 
   return geojson;
+}
+
+function mergeGeojsonCollections(collections) {
+  const features = collections.flatMap((c) => c?.features ?? []);
+  return {
+    type: 'FeatureCollection',
+    features,
+  };
+}
+
+async function loadShapefilesFromUrls(urls) {
+  const results = await Promise.allSettled(
+    urls.map((url) => loadShapefileFromUrl(url))
+  );
+  const success = results
+    .filter((r) => r.status === 'fulfilled')
+    .map((r) => r.value);
+  if (!success.length) {
+    const reasons = results
+      .filter((r) => r.status === 'rejected')
+      .map((r) => r.reason?.message || String(r.reason))
+      .filter(Boolean);
+    const msg = reasons.length
+      ? `地図データの読み込みに失敗しました: ${reasons.join(' / ')}`
+      : '地図データの読み込みに失敗しました';
+    throw new Error(msg);
+  }
+  return mergeGeojsonCollections(success);
 }
 
 function loadCsvFromBuffer(buf) {
@@ -787,8 +827,8 @@ export default function App() {
       setHhRows(null);
 
       const loadShape = async () => {
-        if (DEFAULT_DATA_FILES.shapeBase) {
-          return loadShapefileFromUrl(DEFAULT_DATA_FILES.shapeBase);
+        if (DEFAULT_DATA_FILES.shapeBases?.length) {
+          return loadShapefilesFromUrls(DEFAULT_DATA_FILES.shapeBases);
         }
         throw new Error('地図データのパスが指定されていません');
       };
@@ -1468,13 +1508,20 @@ export default function App() {
                   /data フォルダ内のファイルを自動で読み込みます。
                 </div>
                 <ul style={{ margin: '6px 0 0 18px', fontSize: 12 }}>
-                  <li>
-                    地図境界:
-                    /data/茨木_地図/r2ka27211.shp/.dbf/.prj/.shx/.cpg
-                  </li>
+                  <li>地図境界:</li>
+                  {MAP_SOURCES.map((source) => (
+                    <li key={source.code} style={{ marginLeft: 8 }}>
+                      {source.label}: /{source.path}.shp/.dbf/.prj/.shx/.cpg
+                    </li>
+                  ))}
                   <li>人口: h03_27(茨木_人口).csv</li>
                   <li>世帯: h06_01_27(茨木_世帯).csv</li>
                 </ul>
+                {activeCityCodes.length ? (
+                  <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>
+                    対象市区町村コード: {activeCityCodes.join(' / ')}
+                  </div>
+                ) : null}
                 {dataLoading ? (
                   <div style={{ marginTop: 8, fontSize: 12 }}>
                     読み込み中...
@@ -1859,11 +1906,6 @@ export default function App() {
                     {bizRows ? `OK（${bizRows.length}行）` : '未（同梱なし）'}
                   </span>
                 </div>
-                {activeCityCodes.length ? (
-                  <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>
-                    対象市区町村コード: {activeCityCodes.join(' / ')}
-                  </div>
-                ) : null}
               </Section>
             </div>
           )}
