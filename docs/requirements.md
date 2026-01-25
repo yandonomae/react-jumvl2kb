@@ -11,9 +11,11 @@
 ## 3. データ要件
 ### 3.1 入力データ
 - **同梱データ (/data) を初期ロード**
-  - 地図境界データ (Shapefile ZIP)
-    - .shp/.shx/.dbf を含む ZIP。
+  - 地図境界データ (Shapefile)
+    - 展開済み（.shp/.shx/.dbf/.prj/.cpg）。
+    - 置き場所: `/data/茨木_地図/r2ka27211.*`
     - KEY_CODE もしくは 市区町村コード + 町丁字コード を含む。
+    - DBF の日本語が文字化けしないよう、.cpg で Shift_JIS を指定する。
   - 人口データ (h03, CSV)
     - 男女・年齢階級別人口。
     - Shift_JIS または UTF-8 を想定。
@@ -26,6 +28,7 @@
 
 ### 3.2 文字コード
 - CSV: Shift_JIS / UTF-8 の自動判定。
+- Shapefile: .cpg で DBF の文字コード（例: Shift_JIS）を明示する。
 
 ### 3.3 結合キー
 - KEY_CODE を優先。
