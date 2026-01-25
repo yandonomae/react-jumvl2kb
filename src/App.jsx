@@ -15,7 +15,7 @@ import { zoom, zoomIdentity } from 'd3-zoom';
 
 /**
  * 茨木市統計データ可視化システム（ブラウザ完結 / サーバ不要）
- * - 同梱データ（Shapefile zip + h03/h06 CSV）を初期ロードして可視化
+ * - 同梱データ（展開済み Shapefile + h03/h06 CSV）を初期ロードして可視化
  * - コロプレス（人口/世帯/事業所） + 特化係数（分析）
  * - 鉄道路線オーバーレイ（指定色） + 駅マーカー（サイズ調整） + 線幅調整
  */
@@ -191,7 +191,7 @@ const resolvePublicUrl = (path) => {
 };
 
 const DEFAULT_DATA_FILES = {
-  shapeZip: resolvePublicUrl('data/A002005212020DDSWC27211.zip'),
+  shapeBase: resolvePublicUrl('data/茨木_地図/r2ka27211'),
   populationCsv: resolvePublicUrl('data/h03_27(茨木_人口).csv'),
   householdCsv: resolvePublicUrl('data/h06_01_27(茨木_世帯).csv'),
 };
@@ -339,8 +339,8 @@ function decodeArrayBufferSmart(buf) {
   return score(sjis) > score(utf8) ? sjis : utf8;
 }
 
-async function loadShapefileFromBuffer(buf) {
-  const gj = await shp(buf);
+async function loadShapefileFromUrl(url) {
+  const gj = await shp(url);
   const geojson = Array.isArray(gj) ? gj[0] : gj;
 
   if (!geojson || !geojson.features)
@@ -700,8 +700,15 @@ export default function App() {
       setHhRows(null);
       setCityCode('');
 
+      const loadShape = async () => {
+        if (DEFAULT_DATA_FILES.shapeBase) {
+          return loadShapefileFromUrl(DEFAULT_DATA_FILES.shapeBase);
+        }
+        throw new Error('地図データのパスが指定されていません');
+      };
+
       const [shapeRes, popRes, hhRes] = await Promise.allSettled([
-        fetchBuffer(DEFAULT_DATA_FILES.shapeZip),
+        loadShape(),
         fetchBuffer(DEFAULT_DATA_FILES.populationCsv),
         fetchBuffer(DEFAULT_DATA_FILES.householdCsv),
       ]);
@@ -710,7 +717,7 @@ export default function App() {
 
       if (shapeRes.status === 'fulfilled') {
         try {
-          const geojson = await loadShapefileFromBuffer(shapeRes.value);
+          const geojson = shapeRes.value;
           if (!active) return;
           setShapeGeo(geojson);
           setCityCode(computeFeatureCityCode(geojson));
@@ -1354,7 +1361,10 @@ export default function App() {
                   /data フォルダ内のファイルを自動で読み込みます。
                 </div>
                 <ul style={{ margin: '6px 0 0 18px', fontSize: 12 }}>
-                  <li>地図境界: A002005212020DDSWC27211.zip</li>
+                  <li>
+                    地図境界:
+                    /data/茨木_地図/r2ka27211.shp/.dbf/.prj/.shx/.cpg
+                  </li>
                   <li>人口: h03_27(茨木_人口).csv</li>
                   <li>世帯: h06_01_27(茨木_世帯).csv</li>
                 </ul>
