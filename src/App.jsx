@@ -216,13 +216,7 @@ const CITY_NAME_TO_CODE = Object.fromEntries(
   Object.entries(CITY_CODE_LABELS).map(([code, name]) => [name, code])
 );
 
-const CITY_BOUNDARY_GEOJSON_CANDIDATES = [
-  'data/市境.geojson',
-  'data/市境.json',
-  'data/city_boundaries.geojson',
-  'data/city_boundary.geojson',
-  'data/city-boundary.geojson',
-];
+const CITY_BOUNDARY_GEOJSON_PATH = 'data/市境.geojson';
 
 // h06（世帯）階層（キー=列名）
 const HOUSEHOLD_HIERARCHY = {
@@ -566,21 +560,12 @@ async function loadGeoJsonFromUrl(url) {
 }
 
 async function loadCityBoundaryGeoJson() {
-  for (const path of CITY_BOUNDARY_GEOJSON_CANDIDATES) {
-    try {
-      return {
-        url: path,
-        data: await loadGeoJsonFromUrl(resolvePublicUrl(path)),
-      };
-    } catch (err) {
-      // try next candidate
-    }
-  }
-  throw new Error(
-    `市境データが見つかりません: ${CITY_BOUNDARY_GEOJSON_CANDIDATES.join(
-      ', '
-    )}`
-  );
+  return {
+    url: CITY_BOUNDARY_GEOJSON_PATH,
+    data: await loadGeoJsonFromUrl(
+      resolvePublicUrl(CITY_BOUNDARY_GEOJSON_PATH)
+    ),
+  };
 }
 
 function buildRailGeoJson() {
