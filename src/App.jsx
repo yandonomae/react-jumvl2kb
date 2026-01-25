@@ -262,33 +262,17 @@ function normalizeKeyString(v) {
   return String(v).replace(/\.0$/, '').trim();
 }
 
-function getAreaCodeDigits(geojson) {
-  if (!geojson?.features?.length) return null;
-  const counts = new Map();
+function getAreaCodeLengths(geojson) {
+  if (!geojson?.features?.length) return [];
+  const lengths = new Set();
   for (const feature of geojson.features) {
     const key = normalizeKeyString(feature?.properties?.KEY_CODE);
     if (key.length < 5) continue;
     const areaLength = key.length - 5;
     if (areaLength <= 0) continue;
-    counts.set(areaLength, (counts.get(areaLength) ?? 0) + 1);
+    lengths.add(areaLength);
   }
-  if (!counts.size) return null;
-  let best = null;
-  let bestCount = -1;
-  for (const [len, count] of counts.entries()) {
-    if (count > bestCount) {
-      best = len;
-      bestCount = count;
-    }
-  }
-  return best;
-}
-
-function padCompositeKey(key, areaDigits) {
-  if (!key || !areaDigits) return key;
-  const targetLength = 5 + areaDigits;
-  if (key.length >= targetLength) return key;
-  return key.padStart(targetLength, '0');
+  return Array.from(lengths).sort((a, b) => a - b);
 }
 
 function useResizeObserver(ref) {
@@ -395,10 +379,37 @@ function parseCsvText(text) {
   return cleaned;
 }
 
-function buildCompositeKeyFromRow(row, areaDigits) {
+function buildCompositeKeyFromRow(row, areaCodeLengths, shapeKeySet) {
+  const lengths = areaCodeLengths?.length ? areaCodeLengths : null;
+
   // 1) KEY_CODEがあるならそれを優先
   const direct = normalizeKeyString(row.KEY_CODE ?? row['KEY_CODE']);
-  if (direct) return padCompositeKey(direct, areaDigits);
+  if (direct) {
+    if (!shapeKeySet) return direct;
+    if (shapeKeySet.has(direct)) return direct;
+    if (!lengths || direct.length <= 5) return direct;
+
+    const city = direct.slice(0, 5);
+    const area = direct.slice(5).replace(/[^0-9]/g, '');
+    const areaTrimmed = area.replace(/^0+/, '');
+    const candidates = new Set([direct]);
+
+    if (area) {
+      for (const len of lengths) {
+        candidates.add(`${city}${area.padStart(len, '0')}`);
+      }
+    }
+    if (areaTrimmed) {
+      for (const len of lengths) {
+        candidates.add(`${city}${areaTrimmed.padStart(len, '0')}`);
+      }
+    }
+
+    for (const key of candidates) {
+      if (shapeKeySet.has(key)) return key;
+    }
+    return direct;
+  }
 
   // 2) 市区町村コード + 町丁字コード
   const city = normalizeKeyString(
@@ -412,8 +423,28 @@ function buildCompositeKeyFromRow(row, areaDigits) {
   const city5 = city.padStart(5, '0');
   const areaNorm = area.replace(/[^0-9]/g, '');
   if (!areaNorm) return '';
-  const paddedArea = areaDigits ? areaNorm.padStart(areaDigits, '0') : areaNorm;
-  return `${city5}${paddedArea}`;
+  const areaTrimmed = areaNorm.replace(/^0+/, '');
+  const baseKey = `${city5}${areaNorm}`;
+
+  if (!lengths) return baseKey;
+
+  const candidates = new Set([baseKey]);
+  for (const len of lengths) {
+    candidates.add(`${city5}${areaNorm.padStart(len, '0')}`);
+  }
+  if (areaTrimmed) {
+    for (const len of lengths) {
+      candidates.add(`${city5}${areaTrimmed.padStart(len, '0')}`);
+    }
+  }
+
+  if (shapeKeySet) {
+    for (const key of candidates) {
+      if (shapeKeySet.has(key)) return key;
+    }
+  }
+
+  return baseKey;
 }
 
 function uniq(arr) {
@@ -674,7 +705,18 @@ export default function App() {
 
   const railGeo = useMemo(() => buildRailGeoJson(), []);
   const stations = useMemo(() => collectStations(), []);
-  const areaCodeDigits = useMemo(() => getAreaCodeDigits(shapeGeo), [shapeGeo]);
+  const areaCodeLengths = useMemo(
+    () => getAreaCodeLengths(shapeGeo),
+    [shapeGeo]
+  );
+  const shapeKeySet = useMemo(() => {
+    if (!shapeGeo?.features?.length) return null;
+    return new Set(
+      shapeGeo.features
+        .map((f) => normalizeKeyString(f?.properties?.KEY_CODE))
+        .filter(Boolean)
+    );
+  }, [shapeGeo]);
 
   // --- Initial data load ---
   useEffect(() => {
@@ -911,7 +953,11 @@ export default function App() {
 
       const byKey = new Map();
       for (const r of popRows) {
-        const key = buildCompositeKeyFromRow(r, areaCodeDigits);
+        const key = buildCompositeKeyFromRow(
+          r,
+          areaCodeLengths,
+          shapeKeySet
+        );
         if (!key) continue;
         if (targetCity && !key.startsWith(targetCity)) continue;
 
@@ -950,7 +996,11 @@ export default function App() {
       if (!hhRows?.length) return map;
 
       for (const r of hhRows) {
-        const key = buildCompositeKeyFromRow(r, areaCodeDigits);
+        const key = buildCompositeKeyFromRow(
+          r,
+          areaCodeLengths,
+          shapeKeySet
+        );
         if (!key) continue;
         if (targetCity && !key.startsWith(targetCity)) continue;
 
@@ -967,7 +1017,11 @@ export default function App() {
       if (!bizRows?.length || !bizMetric) return map;
 
       for (const r of bizRows) {
-        const key = buildCompositeKeyFromRow(r, areaCodeDigits);
+        const key = buildCompositeKeyFromRow(
+          r,
+          areaCodeLengths,
+          shapeKeySet
+        );
         if (!key) continue;
         if (targetCity && !key.startsWith(targetCity)) continue;
 
@@ -986,7 +1040,11 @@ export default function App() {
     const temp = [];
 
     for (const r of hhRows) {
-      const key = buildCompositeKeyFromRow(r, areaCodeDigits);
+      const key = buildCompositeKeyFromRow(
+        r,
+        areaCodeLengths,
+        shapeKeySet
+      );
       if (!key) continue;
       if (targetCity && !key.startsWith(targetCity)) continue;
 
@@ -1016,7 +1074,8 @@ export default function App() {
     mode,
     shapeGeo,
     cityCode,
-    areaCodeDigits,
+    areaCodeLengths,
+    shapeKeySet,
     popRows,
     hhRows,
     bizRows,
