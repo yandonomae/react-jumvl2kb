@@ -12,7 +12,6 @@ import {
 } from 'd3-scale-chromatic';
 import { select } from 'd3-selection';
 import { zoom, zoomIdentity } from 'd3-zoom';
-import 'd3-transition';
 
 /**
  * 茨木市統計データ可視化システム（ブラウザ完結 / サーバ不要）
@@ -244,6 +243,35 @@ function normalizeKeyString(v) {
   return String(v).replace(/\.0$/, '').trim();
 }
 
+function getAreaCodeDigits(geojson) {
+  if (!geojson?.features?.length) return null;
+  const counts = new Map();
+  for (const feature of geojson.features) {
+    const key = normalizeKeyString(feature?.properties?.KEY_CODE);
+    if (key.length < 5) continue;
+    const areaLength = key.length - 5;
+    if (areaLength <= 0) continue;
+    counts.set(areaLength, (counts.get(areaLength) ?? 0) + 1);
+  }
+  if (!counts.size) return null;
+  let best = null;
+  let bestCount = -1;
+  for (const [len, count] of counts.entries()) {
+    if (count > bestCount) {
+      best = len;
+      bestCount = count;
+    }
+  }
+  return best;
+}
+
+function padCompositeKey(key, areaDigits) {
+  if (!key || !areaDigits) return key;
+  const targetLength = 5 + areaDigits;
+  if (key.length >= targetLength) return key;
+  return key.padStart(targetLength, '0');
+}
+
 function useResizeObserver(ref) {
   const [size, setSize] = useState({ width: 0, height: 0 });
 
@@ -335,10 +363,10 @@ function parseCsvText(text) {
   return cleaned;
 }
 
-function buildCompositeKeyFromRow(row) {
+function buildCompositeKeyFromRow(row, areaDigits) {
   // 1) KEY_CODEがあるならそれを優先
   const direct = normalizeKeyString(row.KEY_CODE ?? row['KEY_CODE']);
-  if (direct) return direct;
+  if (direct) return padCompositeKey(direct, areaDigits);
 
   // 2) 市区町村コード + 町丁字コード
   const city = normalizeKeyString(
@@ -352,7 +380,8 @@ function buildCompositeKeyFromRow(row) {
   const city5 = city.padStart(5, '0');
   const areaNorm = area.replace(/[^0-9]/g, '');
   if (!areaNorm) return '';
-  return `${city5}${areaNorm}`;
+  const paddedArea = areaDigits ? areaNorm.padStart(areaDigits, '0') : areaNorm;
+  return `${city5}${paddedArea}`;
 }
 
 function uniq(arr) {
@@ -613,6 +642,7 @@ export default function App() {
 
   const railGeo = useMemo(() => buildRailGeoJson(), []);
   const stations = useMemo(() => collectStations(), []);
+  const areaCodeDigits = useMemo(() => getAreaCodeDigits(shapeGeo), [shapeGeo]);
 
   // --- File handlers ---
   const onUploadShapefileZip = async (file) => {
@@ -801,7 +831,7 @@ export default function App() {
 
       const byKey = new Map();
       for (const r of popRows) {
-        const key = buildCompositeKeyFromRow(r);
+        const key = buildCompositeKeyFromRow(r, areaCodeDigits);
         if (!key) continue;
         if (targetCity && !key.startsWith(targetCity)) continue;
 
@@ -840,7 +870,7 @@ export default function App() {
       if (!hhRows?.length) return map;
 
       for (const r of hhRows) {
-        const key = buildCompositeKeyFromRow(r);
+        const key = buildCompositeKeyFromRow(r, areaCodeDigits);
         if (!key) continue;
         if (targetCity && !key.startsWith(targetCity)) continue;
 
@@ -857,7 +887,7 @@ export default function App() {
       if (!bizRows?.length || !bizMetric) return map;
 
       for (const r of bizRows) {
-        const key = buildCompositeKeyFromRow(r);
+        const key = buildCompositeKeyFromRow(r, areaCodeDigits);
         if (!key) continue;
         if (targetCity && !key.startsWith(targetCity)) continue;
 
@@ -876,7 +906,7 @@ export default function App() {
     const temp = [];
 
     for (const r of hhRows) {
-      const key = buildCompositeKeyFromRow(r);
+      const key = buildCompositeKeyFromRow(r, areaCodeDigits);
       if (!key) continue;
       if (targetCity && !key.startsWith(targetCity)) continue;
 
@@ -906,6 +936,7 @@ export default function App() {
     mode,
     shapeGeo,
     cityCode,
+    areaCodeDigits,
     popRows,
     hhRows,
     bizRows,
@@ -964,8 +995,8 @@ export default function App() {
   const onFeatureEnter = (e, f) => {
     const k = normalizeKeyString(f?.properties?.KEY_CODE);
     const name =
-      normalizeKeyString(f?.properties?.S_NAME) ||
       normalizeKeyString(f?.properties?.S_NAME_JA) ||
+      normalizeKeyString(f?.properties?.S_NAME) ||
       '(名称不明)';
     const v = featureValue.get(k);
 
