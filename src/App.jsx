@@ -529,26 +529,64 @@ function getCityCodeFromFeature(feature) {
   return key.length >= 5 ? key.slice(0, 5) : '';
 }
 
-function getCityCodeFromBoundaryFeature(feature) {
-  if (!feature?.properties) return '';
+function getBoundaryCityCodes(feature) {
+  if (!feature?.properties) return [];
   const props = feature.properties;
-  const direct =
-    normalizeKeyString(
-      props.CITY_CODE ??
-        props.city_code ??
-        props.code ??
-        props.CITY ??
-        props.city ??
-        props['市区町村コード'] ??
-        props['市区町村ｺｰﾄﾞ']
-    ) || '';
-  if (direct) return direct.slice(0, 5);
+  const codes = new Set();
+  const pushCode = (value) => {
+    const v = normalizeKeyString(value);
+    if (!v) return;
+    const directMatch = v.match(/^\d{5}$/);
+    if (directMatch) {
+      codes.add(v);
+      return;
+    }
+    const digits = v.match(/\d{5}/);
+    if (digits) {
+      codes.add(digits[0]);
+    }
+    if (CITY_NAME_TO_CODE[v]) {
+      codes.add(CITY_NAME_TO_CODE[v]);
+    }
+  };
 
-  const name =
-    normalizeKeyString(
-      props.CITY_NAME ?? props.city_name ?? props.name ?? props['市区町村名']
-    ) || '';
-  return CITY_NAME_TO_CODE[name] || '';
+  const directFields = [
+    'CITY_CODE',
+    'city_code',
+    'code',
+    'CITY',
+    'city',
+    'CITY_CODE_L',
+    'CITY_CODE_R',
+    'CITY_CODE_1',
+    'CITY_CODE_2',
+    'CITY1',
+    'CITY2',
+    '市区町村コード',
+    '市区町村ｺｰﾄﾞ',
+  ];
+  const nameFields = [
+    'CITY_NAME',
+    'city_name',
+    'name',
+    'CITY_NAME_L',
+    'CITY_NAME_R',
+    'CITY_NAME_1',
+    'CITY_NAME_2',
+    '市区町村名',
+  ];
+
+  for (const key of [...directFields, ...nameFields]) {
+    if (props[key] !== undefined) pushCode(props[key]);
+  }
+
+  for (const value of Object.values(props)) {
+    if (typeof value === 'string' || typeof value === 'number') {
+      pushCode(value);
+    }
+  }
+
+  return Array.from(codes);
 }
 
 async function loadGeoJsonFromUrl(url) {
@@ -1409,9 +1447,11 @@ export default function App() {
   const cityBoundaryFeatures = useMemo(() => {
     if (!boundaryGeo?.features?.length || !selectedCityCodes.length) return [];
     const selectedSet = new Set(selectedCityCodes);
-    return boundaryGeo.features.filter((feature) =>
-      selectedSet.has(getCityCodeFromBoundaryFeature(feature))
-    );
+    return boundaryGeo.features.filter((feature) => {
+      const codes = getBoundaryCityCodes(feature);
+      if (!codes.length) return false;
+      return codes.some((code) => selectedSet.has(code));
+    });
   }, [boundaryGeo, selectedCityCodes]);
 
   const stationPoints = useMemo(() => {
