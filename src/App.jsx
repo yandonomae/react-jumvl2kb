@@ -275,15 +275,6 @@ function getAreaCodeLengths(geojson) {
   return Array.from(lengths).sort((a, b) => a - b);
 }
 
-function padCompositeKey(key, areaDigits) {
-  if (!key || !areaDigits) return key;
-  if (key.length <= 5) return key;
-  const city = key.slice(0, 5);
-  const area = key.slice(5).replace(/[^0-9]/g, '');
-  if (!area) return key;
-  return `${city}${area.padStart(areaDigits, '0')}`;
-}
-
 function useResizeObserver(ref) {
   const [size, setSize] = useState({ width: 0, height: 0 });
 
@@ -394,22 +385,28 @@ function buildCompositeKeyFromRow(row, areaCodeLengths, shapeKeySet) {
   // 1) KEY_CODEがあるならそれを優先
   const direct = normalizeKeyString(row.KEY_CODE ?? row['KEY_CODE']);
   if (direct) {
-    if (!shapeKeySet) {
-      if (lengths) {
-        for (const len of lengths) {
-          const padded = padCompositeKey(direct, len);
-          if (padded !== direct) return padded;
-        }
+    if (!shapeKeySet) return direct;
+    if (shapeKeySet.has(direct)) return direct;
+    if (!lengths || direct.length <= 5) return direct;
+
+    const city = direct.slice(0, 5);
+    const area = direct.slice(5).replace(/[^0-9]/g, '');
+    const areaTrimmed = area.replace(/^0+/, '');
+    const candidates = new Set([direct]);
+
+    if (area) {
+      for (const len of lengths) {
+        candidates.add(`${city}${area.padStart(len, '0')}`);
       }
-      return direct;
+    }
+    if (areaTrimmed) {
+      for (const len of lengths) {
+        candidates.add(`${city}${areaTrimmed.padStart(len, '0')}`);
+      }
     }
 
-    if (shapeKeySet.has(direct)) return direct;
-    if (lengths) {
-      for (const len of lengths) {
-        const padded = padCompositeKey(direct, len);
-        if (shapeKeySet.has(padded)) return padded;
-      }
+    for (const key of candidates) {
+      if (shapeKeySet.has(key)) return key;
     }
     return direct;
   }
@@ -426,17 +423,28 @@ function buildCompositeKeyFromRow(row, areaCodeLengths, shapeKeySet) {
   const city5 = city.padStart(5, '0');
   const areaNorm = area.replace(/[^0-9]/g, '');
   if (!areaNorm) return '';
-  if (lengths) {
-    const candidates = lengths.map(
-      (len) => `${city5}${areaNorm.padStart(len, '0')}`
-    );
-    if (shapeKeySet) {
-      const matched = candidates.find((k) => shapeKeySet.has(k));
-      if (matched) return matched;
-    }
-    return candidates[0];
+  const areaTrimmed = areaNorm.replace(/^0+/, '');
+  const baseKey = `${city5}${areaNorm}`;
+
+  if (!lengths) return baseKey;
+
+  const candidates = new Set([baseKey]);
+  for (const len of lengths) {
+    candidates.add(`${city5}${areaNorm.padStart(len, '0')}`);
   }
-  return `${city5}${areaNorm}`;
+  if (areaTrimmed) {
+    for (const len of lengths) {
+      candidates.add(`${city5}${areaTrimmed.padStart(len, '0')}`);
+    }
+  }
+
+  if (shapeKeySet) {
+    for (const key of candidates) {
+      if (shapeKeySet.has(key)) return key;
+    }
+  }
+
+  return baseKey;
 }
 
 function uniq(arr) {
