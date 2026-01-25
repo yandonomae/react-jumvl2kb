@@ -212,6 +212,18 @@ const MAP_SOURCES = [
   { code: '27203', label: '豊中市', path: 'data/豊中_地図/r2ka27203' },
 ];
 
+const CITY_NAME_TO_CODE = Object.fromEntries(
+  Object.entries(CITY_CODE_LABELS).map(([code, name]) => [name, code])
+);
+
+const CITY_BOUNDARY_GEOJSON_CANDIDATES = [
+  'data/市境.geojson',
+  'data/市境.json',
+  'data/city_boundaries.geojson',
+  'data/city_boundary.geojson',
+  'data/city-boundary.geojson',
+];
+
 // h06（世帯）階層（キー=列名）
 const HOUSEHOLD_HIERARCHY = {
   key: '総数',
@@ -523,6 +535,54 @@ function getCityCodeFromFeature(feature) {
   return key.length >= 5 ? key.slice(0, 5) : '';
 }
 
+function getCityCodeFromBoundaryFeature(feature) {
+  if (!feature?.properties) return '';
+  const props = feature.properties;
+  const direct =
+    normalizeKeyString(
+      props.CITY_CODE ??
+        props.city_code ??
+        props.code ??
+        props.CITY ??
+        props.city ??
+        props['市区町村コード'] ??
+        props['市区町村ｺｰﾄﾞ']
+    ) || '';
+  if (direct) return direct.slice(0, 5);
+
+  const name =
+    normalizeKeyString(
+      props.CITY_NAME ?? props.city_name ?? props.name ?? props['市区町村名']
+    ) || '';
+  return CITY_NAME_TO_CODE[name] || '';
+}
+
+async function loadGeoJsonFromUrl(url) {
+  const res = await fetch(url);
+  if (!res.ok) {
+    throw new Error(`市境データの取得に失敗しました (${res.status}) - ${url}`);
+  }
+  return res.json();
+}
+
+async function loadCityBoundaryGeoJson() {
+  for (const path of CITY_BOUNDARY_GEOJSON_CANDIDATES) {
+    try {
+      return {
+        url: path,
+        data: await loadGeoJsonFromUrl(resolvePublicUrl(path)),
+      };
+    } catch (err) {
+      // try next candidate
+    }
+  }
+  throw new Error(
+    `市境データが見つかりません: ${CITY_BOUNDARY_GEOJSON_CANDIDATES.join(
+      ', '
+    )}`
+  );
+}
+
 function buildRailGeoJson() {
   return {
     type: 'FeatureCollection',
@@ -720,6 +780,9 @@ export default function App() {
   // ファイル
   const [shapeGeo, setShapeGeo] = useState(null);
   const [shapeErr, setShapeErr] = useState('');
+  const [boundaryGeo, setBoundaryGeo] = useState(null);
+  const [boundaryErr, setBoundaryErr] = useState('');
+  const [boundaryUrl, setBoundaryUrl] = useState('');
 
   const [popRows, setPopRows] = useState(null);
   const [popErr, setPopErr] = useState('');
@@ -860,7 +923,10 @@ export default function App() {
       setShapeErr('');
       setPopErr('');
       setHhErr('');
+      setBoundaryErr('');
       setShapeGeo(null);
+      setBoundaryGeo(null);
+      setBoundaryUrl('');
       setPopRows(null);
       setHhRows(null);
 
@@ -871,10 +937,12 @@ export default function App() {
         throw new Error('地図データのパスが指定されていません');
       };
 
-      const [shapeRes, popRes, hhRes] = await Promise.allSettled([
+      const [shapeRes, popRes, hhRes, boundaryRes] =
+        await Promise.allSettled([
         loadShape(),
         fetchBuffer(DEFAULT_DATA_FILES.populationCsv),
         fetchBuffer(DEFAULT_DATA_FILES.householdCsv),
+        loadCityBoundaryGeoJson(),
       ]);
 
       if (!active) return;
@@ -890,6 +958,22 @@ export default function App() {
         }
       } else {
         setShapeErr(shapeRes.reason?.message || String(shapeRes.reason));
+      }
+
+      if (boundaryRes.status === 'fulfilled') {
+        try {
+          const { data, url } = boundaryRes.value || {};
+          if (!active) return;
+          setBoundaryGeo(data);
+          setBoundaryUrl(url || '');
+        } catch (e) {
+          if (!active) return;
+          setBoundaryErr(e?.message || String(e));
+        }
+      } else {
+        setBoundaryErr(
+          boundaryRes.reason?.message || String(boundaryRes.reason)
+        );
       }
 
       if (popRes.status === 'fulfilled') {
@@ -1327,19 +1411,13 @@ export default function App() {
     }));
   }, [railGeo, pathGen]);
 
-  const cityBoundaryPath = useMemo(() => {
-    if (!pathGen || !displayShapeGeo?.features?.length) return '';
-    const topo = topology({ regions: displayShapeGeo });
-    const boundary = mesh(
-      topo,
-      topo.objects.regions,
-      (a, b) =>
-        a &&
-        b &&
-        getCityCodeFromFeature(a) !== getCityCodeFromFeature(b)
+  const cityBoundaryFeatures = useMemo(() => {
+    if (!boundaryGeo?.features?.length || !selectedCityCodes.length) return [];
+    const selectedSet = new Set(selectedCityCodes);
+    return boundaryGeo.features.filter((feature) =>
+      selectedSet.has(getCityCodeFromBoundaryFeature(feature))
     );
-    return pathGen(boundary);
-  }, [displayShapeGeo, pathGen]);
+  }, [boundaryGeo, selectedCityCodes]);
 
   const stationPoints = useMemo(() => {
     if (!projection) return [];
@@ -1412,15 +1490,18 @@ export default function App() {
                 );
               })}
 
-              {boldCityBoundary && cityBoundaryPath ? (
-                <path
-                  d={cityBoundaryPath}
-                  fill="none"
-                  stroke="rgba(0,0,0,0.75)"
-                  strokeWidth={1.6 / transform.k}
-                  strokeLinejoin="round"
-                />
-              ) : null}
+              {boldCityBoundary && cityBoundaryFeatures.length
+                ? cityBoundaryFeatures.map((feature, idx) => (
+                    <path
+                      key={`city-boundary-${idx}`}
+                      d={pathGen(feature)}
+                      fill="none"
+                      stroke="rgba(0,0,0,0.75)"
+                      strokeWidth={1.6 / transform.k}
+                      strokeLinejoin="round"
+                    />
+                  ))
+                : null}
 
               {/* Rail overlay */}
               {showRail && (
@@ -1612,6 +1693,10 @@ export default function App() {
                       {source.label}: /{source.path}.shp/.dbf/.prj/.shx/.cpg
                     </li>
                   ))}
+                  <li>
+                    市境:
+                    {boundaryUrl ? ` /${boundaryUrl}` : ' (読み込み中)'}
+                  </li>
                   <li>人口: h03_27(茨木_人口).csv</li>
                   <li>世帯: h06_01_27(茨木_世帯).csv</li>
                 </ul>
@@ -1626,6 +1711,7 @@ export default function App() {
                   </div>
                 ) : null}
                 {shapeErr ? <ErrBox text={shapeErr} /> : null}
+                {boundaryErr ? <ErrBox text={boundaryErr} /> : null}
                 {popErr ? <ErrBox text={popErr} /> : null}
                 {hhErr ? <ErrBox text={hhErr} /> : null}
               </Section>
