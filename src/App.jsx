@@ -1513,11 +1513,11 @@ export default function App() {
                     d={pathGen(f)}
                     fill={fill}
                     stroke={
-                      boldCityBoundary ? 'rgba(0,0,0,0.75)' : 'rgba(0,0,0,0.35)'
+                      boldCityBoundary
+                        ? 'rgba(0,0,0,0.18)'
+                        : 'rgba(0,0,0,0.35)'
                     }
-                    strokeWidth={
-                      (boldCityBoundary ? 1.2 : 0.6) / transform.k
-                    }
+                    strokeWidth={0.6 / transform.k}
                     onMouseEnter={(e) => onFeatureEnter(e, f)}
                     onMouseMove={onFeatureMove}
                     onMouseLeave={onFeatureLeave}
