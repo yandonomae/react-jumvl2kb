@@ -184,10 +184,31 @@ const resolvePublicUrl = (path) => {
 };
 
 const DEFAULT_DATA_FILES = {
-  shapeBase: resolvePublicUrl('data/茨木_地図/r2ka27211'),
+  shapeBases: [
+    resolvePublicUrl('data/茨木_地図/r2ka27211'),
+    resolvePublicUrl('data/高槻_地図/r2ka27207'),
+    resolvePublicUrl('data/吹田_地図/r2ka27205'),
+    resolvePublicUrl('data/豊中_地図/r2ka27203'),
+  ],
   populationCsv: resolvePublicUrl('data/h03_27(茨木_人口).csv'),
   householdCsv: resolvePublicUrl('data/h06_01_27(茨木_世帯).csv'),
 };
+
+const TARGET_CITY_CODES = ['27211', '27207', '27205', '27203'];
+
+const CITY_CODE_LABELS = {
+  '27211': '茨木市',
+  '27207': '高槻市',
+  '27205': '吹田市',
+  '27203': '豊中市',
+};
+
+const MAP_SOURCES = [
+  { code: '27211', label: '茨木市', path: 'data/茨木_地図/r2ka27211' },
+  { code: '27207', label: '高槻市', path: 'data/高槻_地図/r2ka27207' },
+  { code: '27205', label: '吹田市', path: 'data/吹田_地図/r2ka27205' },
+  { code: '27203', label: '豊中市', path: 'data/豊中_地図/r2ka27203' },
+];
 
 // h06（世帯）階層（キー=列名）
 const HOUSEHOLD_HIERARCHY = {
@@ -326,6 +347,34 @@ async function loadShapefileFromUrl(url) {
   return geojson;
 }
 
+function mergeGeojsonCollections(collections) {
+  const features = collections.flatMap((c) => c?.features ?? []);
+  return {
+    type: 'FeatureCollection',
+    features,
+  };
+}
+
+async function loadShapefilesFromUrls(urls) {
+  const results = await Promise.allSettled(
+    urls.map((url) => loadShapefileFromUrl(url))
+  );
+  const success = results
+    .filter((r) => r.status === 'fulfilled')
+    .map((r) => r.value);
+  if (!success.length) {
+    const reasons = results
+      .filter((r) => r.status === 'rejected')
+      .map((r) => r.reason?.message || String(r.reason))
+      .filter(Boolean);
+    const msg = reasons.length
+      ? `地図データの読み込みに失敗しました: ${reasons.join(' / ')}`
+      : '地図データの読み込みに失敗しました';
+    throw new Error(msg);
+  }
+  return mergeGeojsonCollections(success);
+}
+
 function loadCsvFromBuffer(buf) {
   const text = decodeArrayBufferSmart(buf);
   return parseCsvText(text);
@@ -444,11 +493,27 @@ function uniq(arr) {
   return Array.from(new Set(arr));
 }
 
-function computeFeatureCityCode(geojson) {
-  if (!geojson?.features?.length) return '';
-  const k = normalizeKeyString(geojson.features[0]?.properties?.KEY_CODE);
-  if (k.length >= 5) return k.slice(0, 5);
-  return '';
+function getCityCodesFromGeojson(geojson) {
+  if (!geojson?.features?.length) return [];
+  const codes = new Set();
+  for (const feature of geojson.features) {
+    const key = normalizeKeyString(feature?.properties?.KEY_CODE);
+    if (key.length >= 5) codes.add(key.slice(0, 5));
+  }
+  return Array.from(codes);
+}
+
+function buildCityNameMap(geojson) {
+  const map = new Map();
+  if (!geojson?.features?.length) return map;
+  for (const feature of geojson.features) {
+    const key = normalizeKeyString(feature?.properties?.KEY_CODE);
+    if (key.length < 5) continue;
+    const code = key.slice(0, 5);
+    const name = normalizeKeyString(feature?.properties?.CITY_NAME);
+    if (name && !map.has(code)) map.set(code, name);
+  }
+  return map;
 }
 
 function buildRailGeoJson() {
@@ -648,7 +713,6 @@ export default function App() {
   // ファイル
   const [shapeGeo, setShapeGeo] = useState(null);
   const [shapeErr, setShapeErr] = useState('');
-  const [cityCode, setCityCode] = useState('');
 
   const [popRows, setPopRows] = useState(null);
   const [popErr, setPopErr] = useState('');
@@ -664,6 +728,8 @@ export default function App() {
   const [showRail, setShowRail] = useState(true);
   const [railWidth, setRailWidth] = useState(2.4); // ★追加：線幅
   const [stationRadius, setStationRadius] = useState(5);
+  const [boldCityBoundary, setBoldCityBoundary] = useState(false);
+  const [scaleScope, setScaleScope] = useState('visible'); // visible | all
 
   // 人口
   const [sexSel, setSexSel] = useState({ 男: true, 女: true, 総数: false });
@@ -698,11 +764,68 @@ export default function App() {
 
   const railGeo = useMemo(() => buildRailGeoJson(), []);
   const stations = useMemo(() => collectStations(), []);
+  const activeCityCodes = useMemo(() => {
+    const available = getCityCodesFromGeojson(shapeGeo);
+    if (!available.length) return [];
+    const availableSet = new Set(available);
+    const filtered = TARGET_CITY_CODES.filter((code) =>
+      availableSet.has(code)
+    );
+    return filtered.length ? filtered : available;
+  }, [shapeGeo]);
+  const [selectedCityCodes, setSelectedCityCodes] = useState([]);
+  const cityNameMap = useMemo(() => buildCityNameMap(shapeGeo), [shapeGeo]);
+  const activeCityNames = useMemo(
+    () =>
+      activeCityCodes.map(
+        (code) => cityNameMap.get(code) || CITY_CODE_LABELS[code] || code
+      ),
+    [activeCityCodes, cityNameMap]
+  );
+  const selectedCityNames = useMemo(
+    () =>
+      selectedCityCodes.map(
+        (code) => cityNameMap.get(code) || CITY_CODE_LABELS[code] || code
+      ),
+    [selectedCityCodes, cityNameMap]
+  );
+  useEffect(() => {
+    if (!activeCityCodes.length) return;
+    setSelectedCityCodes((prev) => {
+      if (!prev.length) return activeCityCodes;
+      const availableSet = new Set(activeCityCodes);
+      const filtered = prev.filter((code) => availableSet.has(code));
+      return filtered.length ? filtered : activeCityCodes;
+    });
+  }, [activeCityCodes]);
+  const displayShapeGeo = useMemo(() => {
+    if (!shapeGeo?.features?.length) return shapeGeo;
+    if (!selectedCityCodes.length) return shapeGeo;
+    const set = new Set(selectedCityCodes);
+    const features = shapeGeo.features.filter((f) => {
+      const key = normalizeKeyString(f?.properties?.KEY_CODE);
+      if (key.length < 5) return false;
+      return set.has(key.slice(0, 5));
+    });
+    return { ...shapeGeo, features };
+  }, [shapeGeo, selectedCityCodes]);
   const areaCodeLengths = useMemo(
+    () => getAreaCodeLengths(displayShapeGeo),
+    [displayShapeGeo]
+  );
+  const areaCodeLengthsAll = useMemo(
     () => getAreaCodeLengths(shapeGeo),
     [shapeGeo]
   );
   const shapeKeySet = useMemo(() => {
+    if (!displayShapeGeo?.features?.length) return null;
+    return new Set(
+      displayShapeGeo.features
+        .map((f) => normalizeKeyString(f?.properties?.KEY_CODE))
+        .filter(Boolean)
+    );
+  }, [displayShapeGeo]);
+  const shapeKeySetAll = useMemo(() => {
     if (!shapeGeo?.features?.length) return null;
     return new Set(
       shapeGeo.features
@@ -733,11 +856,10 @@ export default function App() {
       setShapeGeo(null);
       setPopRows(null);
       setHhRows(null);
-      setCityCode('');
 
       const loadShape = async () => {
-        if (DEFAULT_DATA_FILES.shapeBase) {
-          return loadShapefileFromUrl(DEFAULT_DATA_FILES.shapeBase);
+        if (DEFAULT_DATA_FILES.shapeBases?.length) {
+          return loadShapefilesFromUrls(DEFAULT_DATA_FILES.shapeBases);
         }
         throw new Error('地図データのパスが指定されていません');
       };
@@ -755,7 +877,6 @@ export default function App() {
           const geojson = shapeRes.value;
           if (!active) return;
           setShapeGeo(geojson);
-          setCityCode(computeFeatureCityCode(geojson));
         } catch (e) {
           if (!active) return;
           setShapeErr(e?.message || String(e));
@@ -883,19 +1004,19 @@ export default function App() {
 
   // --- Compute projection/path ---
   const projection = useMemo(() => {
-    if (!shapeGeo || !width || !height) return null;
+    if (!displayShapeGeo || !width || !height) return null;
 
     const pad = 16;
     const w = Math.max(10, width - pad * 2);
     const h = Math.max(10, height - pad * 2);
 
-    const p = geoMercator().fitSize([w, h], shapeGeo);
+    const p = geoMercator().fitSize([w, h], displayShapeGeo);
 
     const t = p.translate();
     p.translate([t[0] + pad, t[1] + pad]);
 
     return p;
-  }, [shapeGeo, width, height]);
+  }, [displayShapeGeo, width, height]);
 
   const pathGen = useMemo(() => {
     if (!projection) return null;
@@ -915,7 +1036,7 @@ export default function App() {
     zoomRef.current = z;
 
     setTransform(zoomIdentity);
-  }, [shapeGeo, width, height]);
+  }, [displayShapeGeo, width, height]);
 
   const zoomIn = () => {
     if (!svgRef.current || !zoomRef.current) return;
@@ -930,29 +1051,34 @@ export default function App() {
     select(svgRef.current).call(zoomRef.current.transform, zoomIdentity);
   };
 
-  // --- Data join / values per feature ---
-  const featureValue = useMemo(() => {
+  const buildFeatureValue = ({
+    targetCodes,
+    areaLengths,
+    keySet,
+  }) => {
     const map = new Map();
     const pushValue = (key, val) => {
       if (!key) return;
       map.set(key, val);
     };
 
-    if (!shapeGeo?.features?.length) return map;
-    const targetCity = cityCode || computeFeatureCityCode(shapeGeo);
+    const targetCityCodes = targetCodes?.length
+      ? new Set(targetCodes)
+      : null;
+    const isTargetCity = (key) => {
+      if (!targetCityCodes) return true;
+      if (!key || key.length < 5) return false;
+      return targetCityCodes.has(key.slice(0, 5));
+    };
 
     if (mode === 'population') {
       if (!popRows?.length) return map;
 
       const byKey = new Map();
       for (const r of popRows) {
-        const key = buildCompositeKeyFromRow(
-          r,
-          areaCodeLengths,
-          shapeKeySet
-        );
+        const key = buildCompositeKeyFromRow(r, areaLengths, keySet);
         if (!key) continue;
-        if (targetCity && !key.startsWith(targetCity)) continue;
+        if (!isTargetCity(key)) continue;
 
         const sex = normalizeKeyString(r['男女']);
         if (!sex) continue;
@@ -989,13 +1115,9 @@ export default function App() {
       if (!hhRows?.length) return map;
 
       for (const r of hhRows) {
-        const key = buildCompositeKeyFromRow(
-          r,
-          areaCodeLengths,
-          shapeKeySet
-        );
+        const key = buildCompositeKeyFromRow(r, areaLengths, keySet);
         if (!key) continue;
-        if (targetCity && !key.startsWith(targetCity)) continue;
+        if (!isTargetCity(key)) continue;
 
         const rowType = normalizeKeyString(r['世帯員の年齢による世帯の種類']);
         if (rowType !== hhRowType) continue;
@@ -1010,13 +1132,9 @@ export default function App() {
       if (!bizRows?.length || !bizMetric) return map;
 
       for (const r of bizRows) {
-        const key = buildCompositeKeyFromRow(
-          r,
-          areaCodeLengths,
-          shapeKeySet
-        );
+        const key = buildCompositeKeyFromRow(r, areaLengths, keySet);
         if (!key) continue;
-        if (targetCity && !key.startsWith(targetCity)) continue;
+        if (!isTargetCity(key)) continue;
 
         const v = safeToNumber(r[bizMetric]);
         if (v === null) continue;
@@ -1033,13 +1151,9 @@ export default function App() {
     const temp = [];
 
     for (const r of hhRows) {
-      const key = buildCompositeKeyFromRow(
-        r,
-        areaCodeLengths,
-        shapeKeySet
-      );
+      const key = buildCompositeKeyFromRow(r, areaLengths, keySet);
       if (!key) continue;
-      if (targetCity && !key.startsWith(targetCity)) continue;
+      if (!isTargetCity(key)) continue;
 
       const rowType = normalizeKeyString(r['世帯員の年齢による世帯の種類']);
       if (rowType !== hhRowType) continue;
@@ -1063,10 +1177,20 @@ export default function App() {
     }
 
     return map;
+  };
+
+  // --- Data join / values per feature ---
+  const featureValue = useMemo(() => {
+    if (!displayShapeGeo?.features?.length) return new Map();
+    return buildFeatureValue({
+      targetCodes: selectedCityCodes,
+      areaLengths: areaCodeLengths,
+      keySet: shapeKeySet,
+    });
   }, [
     mode,
-    shapeGeo,
-    cityCode,
+    displayShapeGeo,
+    selectedCityCodes,
     areaCodeLengths,
     shapeKeySet,
     popRows,
@@ -1080,14 +1204,44 @@ export default function App() {
     analysisMetric,
   ]);
 
+  const featureValueAll = useMemo(() => {
+    if (!shapeGeo?.features?.length) return new Map();
+    return buildFeatureValue({
+      targetCodes: activeCityCodes,
+      areaLengths: areaCodeLengthsAll,
+      keySet: shapeKeySetAll,
+    });
+  }, [
+    mode,
+    shapeGeo,
+    activeCityCodes,
+    areaCodeLengthsAll,
+    shapeKeySetAll,
+    popRows,
+    hhRows,
+    bizRows,
+    sexSel,
+    ageSel,
+    hhRowType,
+    hhMetric,
+    bizMetric,
+    analysisMetric,
+  ]);
+
   // --- Stats + color scale ---
   const valueStats = useMemo(() => {
-    if (!shapeGeo?.features?.length) return { min: 0, max: 1, mid: null };
+    const scopeGeo =
+      scaleScope === 'all' ? shapeGeo : displayShapeGeo;
+    const scopeValues =
+      scaleScope === 'all' ? featureValueAll : featureValue;
+
+    if (!scopeGeo?.features?.length)
+      return { min: 0, max: 1, mid: null };
 
     const vals = [];
-    for (const f of shapeGeo.features) {
+    for (const f of scopeGeo.features) {
       const k = normalizeKeyString(f?.properties?.KEY_CODE);
-      const v = featureValue.get(k);
+      const v = scopeValues.get(k);
       if (v === null || v === undefined || Number.isNaN(v)) continue;
       vals.push(Number(v));
     }
@@ -1097,7 +1251,14 @@ export default function App() {
 
     if (mode === 'analysis') return { min: mn ?? 0, max: mx ?? 1, mid: 1.0 };
     return { min: mn ?? 0, max: mx ?? 1, mid: null };
-  }, [mode, shapeGeo, featureValue]);
+  }, [
+    mode,
+    displayShapeGeo,
+    shapeGeo,
+    featureValue,
+    featureValueAll,
+    scaleScope,
+  ]);
 
   const colorForValue = useMemo(() => {
     const { min, max } = valueStats;
@@ -1171,12 +1332,9 @@ export default function App() {
   }, [stations, projection]);
 
   const cityLabel = useMemo(() => {
-    if (!shapeGeo?.features?.length) return '';
-    const name = normalizeKeyString(
-      shapeGeo.features[0]?.properties?.CITY_NAME
-    );
-    return name ? `（${name}）` : '';
-  }, [shapeGeo]);
+    if (!selectedCityNames.length) return '';
+    return `（${selectedCityNames.join('・')}）`;
+  }, [selectedCityNames]);
 
   const winW = typeof window !== 'undefined' ? window.innerWidth : 1200;
   const winH = typeof window !== 'undefined' ? window.innerHeight : 800;
@@ -1200,7 +1358,7 @@ export default function App() {
         >
           <rect x={0} y={0} width={width} height={height} fill="#fff" />
 
-          {!shapeGeo || !pathGen ? (
+          {!displayShapeGeo || !pathGen ? (
             <text x={24} y={40} fontSize={14} fill="#333">
               同梱データを読み込み中です。しばらくお待ちください。
             </text>
@@ -1209,7 +1367,7 @@ export default function App() {
               transform={`translate(${transform.x},${transform.y}) scale(${transform.k})`}
             >
               {/* Choropleth polygons */}
-              {shapeGeo.features.map((f, idx) => {
+              {displayShapeGeo.features.map((f, idx) => {
                 const k = normalizeKeyString(f?.properties?.KEY_CODE);
                 const v = featureValue.get(k);
                 const hasV = v !== null && v !== undefined && !Number.isNaN(v);
@@ -1220,8 +1378,12 @@ export default function App() {
                     key={`${k}_${idx}`}
                     d={pathGen(f)}
                     fill={fill}
-                    stroke="rgba(0,0,0,0.35)"
-                    strokeWidth={0.6 / transform.k}
+                    stroke={
+                      boldCityBoundary ? 'rgba(0,0,0,0.75)' : 'rgba(0,0,0,0.35)'
+                    }
+                    strokeWidth={
+                      (boldCityBoundary ? 1.2 : 0.6) / transform.k
+                    }
                     onMouseEnter={(e) => onFeatureEnter(e, f)}
                     onMouseMove={onFeatureMove}
                     onMouseLeave={onFeatureLeave}
@@ -1320,7 +1482,7 @@ export default function App() {
           }}
         >
           <div style={{ fontWeight: 800, fontSize: 12 }}>
-            茨木市統計データ可視化 {cityLabel}
+            北摂統計データ可視化 {cityLabel}
           </div>
           <div
             style={{ width: 1, height: 20, background: 'rgba(0,0,0,0.12)' }}
@@ -1413,13 +1575,20 @@ export default function App() {
                   /data フォルダ内のファイルを自動で読み込みます。
                 </div>
                 <ul style={{ margin: '6px 0 0 18px', fontSize: 12 }}>
-                  <li>
-                    地図境界:
-                    /data/茨木_地図/r2ka27211.shp/.dbf/.prj/.shx/.cpg
-                  </li>
+                  <li>地図境界:</li>
+                  {MAP_SOURCES.map((source) => (
+                    <li key={source.code} style={{ marginLeft: 8 }}>
+                      {source.label}: /{source.path}.shp/.dbf/.prj/.shx/.cpg
+                    </li>
+                  ))}
                   <li>人口: h03_27(茨木_人口).csv</li>
                   <li>世帯: h06_01_27(茨木_世帯).csv</li>
                 </ul>
+                {selectedCityCodes.length ? (
+                  <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>
+                    対象市区町村コード: {selectedCityCodes.join(' / ')}
+                  </div>
+                ) : null}
                 {dataLoading ? (
                   <div style={{ marginTop: 8, fontSize: 12 }}>
                     読み込み中...
@@ -1428,6 +1597,76 @@ export default function App() {
                 {shapeErr ? <ErrBox text={shapeErr} /> : null}
                 {popErr ? <ErrBox text={popErr} /> : null}
                 {hhErr ? <ErrBox text={hhErr} /> : null}
+              </Section>
+
+              <Section title="表示設定">
+                <label
+                  style={{ display: 'flex', gap: 10, alignItems: 'center' }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={boldCityBoundary}
+                    onChange={(e) => setBoldCityBoundary(e.target.checked)}
+                  />
+                  <span>市境を濃く表示</span>
+                </label>
+
+                <div style={{ marginTop: 10 }}>
+                  <div
+                    style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}
+                  >
+                    スケール範囲
+                  </div>
+                  <select
+                    value={scaleScope}
+                    onChange={(e) => setScaleScope(e.target.value)}
+                    style={selectStyle}
+                  >
+                    <option value="visible">表示中の範囲に合わせる</option>
+                    <option value="all">全市区町村の最大に合わせる</option>
+                  </select>
+                </div>
+              </Section>
+
+              <Section title="表示する市区町村">
+                {activeCityCodes.length ? (
+                  activeCityCodes.map((code) => {
+                    const label =
+                      cityNameMap.get(code) || CITY_CODE_LABELS[code] || code;
+                    const checked = selectedCityCodes.includes(code);
+                    return (
+                      <label
+                        key={code}
+                        style={{
+                          display: 'flex',
+                          gap: 8,
+                          alignItems: 'center',
+                          margin: '4px 0',
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={(e) => {
+                            setSelectedCityCodes((prev) => {
+                              const set = new Set(prev);
+                              if (e.target.checked) set.add(code);
+                              else set.delete(code);
+                              return Array.from(set);
+                            });
+                          }}
+                        />
+                        <span>
+                          {label}（{code}）
+                        </span>
+                      </label>
+                    );
+                  })
+                ) : (
+                  <div style={{ fontSize: 12, opacity: 0.75 }}>
+                    地図データ読み込み後に選択肢が表示されます。
+                  </div>
+                )}
               </Section>
 
               {/* Rail overlay */}
@@ -1781,8 +2020,8 @@ export default function App() {
                 <div style={kvRow}>
                   <span style={kvKey}>地図</span>
                   <span style={kvVal}>
-                    {shapeGeo
-                      ? `OK（${shapeGeo.features.length}ポリゴン）`
+                    {displayShapeGeo
+                      ? `OK（${displayShapeGeo.features.length}ポリゴン）`
                       : '未'}
                   </span>
                 </div>
@@ -1804,18 +2043,13 @@ export default function App() {
                     {bizRows ? `OK（${bizRows.length}行）` : '未（同梱なし）'}
                   </span>
                 </div>
-                {cityCode ? (
-                  <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>
-                    市区町村コード推定: {cityCode}
-                  </div>
-                ) : null}
               </Section>
             </div>
           )}
         </div>
 
         {/* Legend */}
-        {shapeGeo && (
+        {displayShapeGeo && (
           <Legend
             mode={mode}
             min={valueStats.min}
