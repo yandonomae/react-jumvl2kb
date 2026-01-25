@@ -12,6 +12,8 @@ import {
 } from 'd3-scale-chromatic';
 import { select } from 'd3-selection';
 import { zoom, zoomIdentity } from 'd3-zoom';
+import { topology } from 'topojson-server';
+import { mesh } from 'topojson-client';
 
 /**
  * 茨木市統計データ可視化システム（ブラウザ完結 / サーバ不要）
@@ -929,11 +931,11 @@ export default function App() {
   const shapeKeySetAll = useMemo(() => {
     if (!shapeGeo?.features?.length) return null;
     return new Set(
-      shapeGeo.features
+      displayShapeGeo.features
         .map((f) => normalizeKeyString(f?.properties?.KEY_CODE))
         .filter(Boolean)
     );
-  }, [shapeGeo]);
+  }, [displayShapeGeo]);
 
   // --- Initial data load ---
   useEffect(() => {
