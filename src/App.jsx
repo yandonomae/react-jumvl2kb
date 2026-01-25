@@ -15,7 +15,7 @@ import { zoom, zoomIdentity } from 'd3-zoom';
 
 /**
  * 茨木市統計データ可視化システム（ブラウザ完結 / サーバ不要）
- * - Shapefile(zip) + CSV(h03/h06/事業所) を毎回アップロードして可視化
+ * - 同梱データ（Shapefile zip + h03/h06 CSV）を初期ロードして可視化
  * - コロプレス（人口/世帯/事業所） + 特化係数（分析）
  * - 鉄道路線オーバーレイ（指定色） + 駅マーカー（サイズ調整） + 線幅調整
  */
@@ -177,6 +177,12 @@ const RAIL_CONNECTORS = [
 
 const DEFAULT_MODE = 'population'; // population | household | business | analysis
 
+const DEFAULT_DATA_FILES = {
+  shapeZip: `${process.env.PUBLIC_URL}/data/A002005212020DDSWC27211.zip`,
+  populationCsv: `${process.env.PUBLIC_URL}/data/h03_27(茨木_人口).csv`,
+  householdCsv: `${process.env.PUBLIC_URL}/data/h06_01_27(茨木_世帯).csv`,
+};
+
 // h06（世帯）階層（キー=列名）
 const HOUSEHOLD_HIERARCHY = {
   key: '総数',
@@ -293,9 +299,7 @@ function useResizeObserver(ref) {
   return size;
 }
 
-async function readTextSmart(file) {
-  const buf = await file.arrayBuffer();
-
+function decodeArrayBufferSmart(buf) {
   const tryDecode = (enc) => {
     try {
       return new TextDecoder(enc).decode(buf);
@@ -320,6 +324,21 @@ async function readTextSmart(file) {
   };
 
   return score(sjis) > score(utf8) ? sjis : utf8;
+}
+
+async function loadShapefileFromBuffer(buf) {
+  const gj = await shp(buf);
+  const geojson = Array.isArray(gj) ? gj[0] : gj;
+
+  if (!geojson || !geojson.features)
+    throw new Error('GeoJSON変換に失敗しました（featuresがありません）');
+
+  return geojson;
+}
+
+function loadCsvFromBuffer(buf) {
+  const text = decodeArrayBufferSmart(buf);
+  return parseCsvText(text);
 }
 
 function findHeaderRowIndex(lines) {
@@ -601,7 +620,7 @@ export default function App() {
   const [hhErr, setHhErr] = useState('');
 
   const [bizRows, setBizRows] = useState(null);
-  const [bizErr, setBizErr] = useState('');
+  const [dataLoading, setDataLoading] = useState(false);
 
   // UI状態
   const [panelOpen, setPanelOpen] = useState(true);
@@ -644,46 +663,87 @@ export default function App() {
   const stations = useMemo(() => collectStations(), []);
   const areaCodeDigits = useMemo(() => getAreaCodeDigits(shapeGeo), [shapeGeo]);
 
-  // --- File handlers ---
-  const onUploadShapefileZip = async (file) => {
-    setShapeErr('');
-    setShapeGeo(null);
-    setCityCode('');
+  // --- Initial data load ---
+  useEffect(() => {
+    let active = true;
 
-    try {
-      const buf = await file.arrayBuffer();
-      const gj = await shp(buf);
-      const geojson = Array.isArray(gj) ? gj[0] : gj;
-
-      if (!geojson || !geojson.features)
-        throw new Error('GeoJSON変換に失敗しました（featuresがありません）');
-
-      setShapeGeo(geojson);
-      setCityCode(computeFeatureCityCode(geojson));
-    } catch (e) {
-      setShapeErr(e?.message || String(e));
-    }
-  };
-
-  const onUploadCsv = async (file, kind) => {
-    const setters = {
-      population: { setRows: setPopRows, setErr: setPopErr },
-      household: { setRows: setHhRows, setErr: setHhErr },
-      business: { setRows: setBizRows, setErr: setBizErr },
+    const fetchBuffer = async (url) => {
+      const res = await fetch(url);
+      if (!res.ok) {
+        throw new Error(
+          `データ取得に失敗しました (${res.status}) - ${url}`
+        );
+      }
+      return res.arrayBuffer();
     };
-    const { setRows, setErr } = setters[kind];
 
-    setErr('');
-    setRows(null);
+    const load = async () => {
+      setDataLoading(true);
+      setShapeErr('');
+      setPopErr('');
+      setHhErr('');
+      setShapeGeo(null);
+      setPopRows(null);
+      setHhRows(null);
+      setCityCode('');
 
-    try {
-      const text = await readTextSmart(file);
-      const rows = parseCsvText(text);
-      setRows(rows);
-    } catch (e) {
-      setErr(e?.message || String(e));
-    }
-  };
+      const [shapeRes, popRes, hhRes] = await Promise.allSettled([
+        fetchBuffer(DEFAULT_DATA_FILES.shapeZip),
+        fetchBuffer(DEFAULT_DATA_FILES.populationCsv),
+        fetchBuffer(DEFAULT_DATA_FILES.householdCsv),
+      ]);
+
+      if (!active) return;
+
+      if (shapeRes.status === 'fulfilled') {
+        try {
+          const geojson = await loadShapefileFromBuffer(shapeRes.value);
+          if (!active) return;
+          setShapeGeo(geojson);
+          setCityCode(computeFeatureCityCode(geojson));
+        } catch (e) {
+          if (!active) return;
+          setShapeErr(e?.message || String(e));
+        }
+      } else {
+        setShapeErr(shapeRes.reason?.message || String(shapeRes.reason));
+      }
+
+      if (popRes.status === 'fulfilled') {
+        try {
+          const rows = loadCsvFromBuffer(popRes.value);
+          if (!active) return;
+          setPopRows(rows);
+        } catch (e) {
+          if (!active) return;
+          setPopErr(e?.message || String(e));
+        }
+      } else {
+        setPopErr(popRes.reason?.message || String(popRes.reason));
+      }
+
+      if (hhRes.status === 'fulfilled') {
+        try {
+          const rows = loadCsvFromBuffer(hhRes.value);
+          if (!active) return;
+          setHhRows(rows);
+        } catch (e) {
+          if (!active) return;
+          setHhErr(e?.message || String(e));
+        }
+      } else {
+        setHhErr(hhRes.reason?.message || String(hhRes.reason));
+      }
+
+      if (active) setDataLoading(false);
+    };
+
+    load();
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   // --- Derived: columns/options ---
   const popAgeColumns = useMemo(() => {
@@ -1070,7 +1130,7 @@ export default function App() {
 
           {!shapeGeo || !pathGen ? (
             <text x={24} y={40} fontSize={14} fill="#333">
-              左下のパネルから Shapefile(zip) をアップロードしてください。
+              同梱データを読み込み中です。しばらくお待ちください。
             </text>
           ) : (
             <g
@@ -1275,39 +1335,24 @@ export default function App() {
                 />
               </div>
 
-              {/* Uploads */}
-              <Section title="ファイルアップロード（毎回ローカルで処理）">
-                <FileRow
-                  label="地図境界（Shapefile ZIP）"
-                  accept=".zip"
-                  onFile={onUploadShapefileZip}
-                  note=".shp/.shx/.dbf を含むZIP"
-                />
+              {/* Built-in data */}
+              <Section title="同梱データ（初期ロード）">
+                <div style={{ fontSize: 12, opacity: 0.8 }}>
+                  /data フォルダ内のファイルを自動で読み込みます。
+                </div>
+                <ul style={{ margin: '6px 0 0 18px', fontSize: 12 }}>
+                  <li>地図境界: A002005212020DDSWC27211.zip</li>
+                  <li>人口: h03_27(茨木_人口).csv</li>
+                  <li>世帯: h06_01_27(茨木_世帯).csv</li>
+                </ul>
+                {dataLoading ? (
+                  <div style={{ marginTop: 8, fontSize: 12 }}>
+                    読み込み中...
+                  </div>
+                ) : null}
                 {shapeErr ? <ErrBox text={shapeErr} /> : null}
-
-                <FileRow
-                  label="人口データ（h03 CSV）"
-                  accept=".csv"
-                  onFile={(f) => onUploadCsv(f, 'population')}
-                  note="Shift_JIS / UTF-8 どちらも可"
-                />
                 {popErr ? <ErrBox text={popErr} /> : null}
-
-                <FileRow
-                  label="世帯データ（h06 CSV）"
-                  accept=".csv"
-                  onFile={(f) => onUploadCsv(f, 'household')}
-                  note="Shift_JIS / UTF-8 どちらも可"
-                />
                 {hhErr ? <ErrBox text={hhErr} /> : null}
-
-                <FileRow
-                  label="事業所データ（CSV）"
-                  accept=".csv"
-                  onFile={(f) => onUploadCsv(f, 'business')}
-                  note="任意形式（KEY_CODE か 市区町村コード+町丁字コード があると確実）"
-                />
-                {bizErr ? <ErrBox text={bizErr} /> : null}
               </Section>
 
               {/* Rail overlay */}
@@ -1370,7 +1415,7 @@ export default function App() {
                 <Section title="人口モード（性別×年齢の合算）">
                   {!popRows ? (
                     <div style={{ fontSize: 12, opacity: 0.75 }}>
-                      h03 CSV をアップロードすると選択肢が出ます。
+                      人口データが読み込まれると選択肢が表示されます。
                     </div>
                   ) : (
                     <>
@@ -1490,7 +1535,7 @@ export default function App() {
                 <Section title="世帯モード（階層選択）">
                   {!hhRows ? (
                     <div style={{ fontSize: 12, opacity: 0.75 }}>
-                      h06 CSV をアップロードすると選択肢が出ます。
+                      世帯データが読み込まれると選択肢が表示されます。
                     </div>
                   ) : (
                     <>
@@ -1551,7 +1596,7 @@ export default function App() {
                 <Section title="事業所モード（暫定：数値列を選択して塗り分け）">
                   {!bizRows ? (
                     <div style={{ fontSize: 12, opacity: 0.75 }}>
-                      事業所CSVが未アップロードです。まずはアップロードしてください。
+                      事業所データは同梱されていません。
                     </div>
                   ) : businessNumericColumns.length === 0 ? (
                     <div style={{ fontSize: 12, opacity: 0.75 }}>
@@ -1593,7 +1638,7 @@ export default function App() {
                 <Section title="分析モード（特化係数）">
                   {!hhRows ? (
                     <div style={{ fontSize: 12, opacity: 0.75 }}>
-                      分析は h06（世帯）CSV が必要です。
+                      世帯データが読み込まれると分析が有効になります。
                     </div>
                   ) : (
                     <>
@@ -1681,7 +1726,7 @@ export default function App() {
                 <div style={kvRow}>
                   <span style={kvKey}>事業所</span>
                   <span style={kvVal}>
-                    {bizRows ? `OK（${bizRows.length}行）` : '未'}
+                    {bizRows ? `OK（${bizRows.length}行）` : '未（同梱なし）'}
                   </span>
                 </div>
                 {cityCode ? (
@@ -1735,29 +1780,6 @@ function Section({ title, children }) {
         {title}
       </div>
       <div>{children}</div>
-    </div>
-  );
-}
-
-function FileRow({ label, accept, onFile, note }) {
-  return (
-    <div style={{ marginBottom: 10 }}>
-      <div style={{ fontSize: 12, fontWeight: 800 }}>{label}</div>
-      <div
-        style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 6 }}
-      >
-        <input
-          type="file"
-          accept={accept}
-          onChange={(e) => {
-            const f = e.target.files?.[0];
-            if (f) onFile(f);
-          }}
-        />
-      </div>
-      {note ? (
-        <div style={{ fontSize: 12, opacity: 0.75, marginTop: 4 }}>{note}</div>
-      ) : null}
     </div>
   );
 }
