@@ -828,11 +828,11 @@ export default function App() {
   const shapeKeySetAll = useMemo(() => {
     if (!shapeGeo?.features?.length) return null;
     return new Set(
-      shapeGeo.features
+      displayShapeGeo.features
         .map((f) => normalizeKeyString(f?.properties?.KEY_CODE))
         .filter(Boolean)
     );
-  }, [shapeGeo]);
+  }, [displayShapeGeo]);
 
   // --- Initial data load ---
   useEffect(() => {
