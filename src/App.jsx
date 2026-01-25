@@ -728,6 +728,8 @@ export default function App() {
   const [showRail, setShowRail] = useState(true);
   const [railWidth, setRailWidth] = useState(2.4); // ★追加：線幅
   const [stationRadius, setStationRadius] = useState(5);
+  const [boldCityBoundary, setBoldCityBoundary] = useState(false);
+  const [scaleScope, setScaleScope] = useState('visible'); // visible | all
 
   // 人口
   const [sexSel, setSexSel] = useState({ 男: true, 女: true, 総数: false });
@@ -771,6 +773,7 @@ export default function App() {
     );
     return filtered.length ? filtered : available;
   }, [shapeGeo]);
+  const [selectedCityCodes, setSelectedCityCodes] = useState([]);
   const cityNameMap = useMemo(() => buildCityNameMap(shapeGeo), [shapeGeo]);
   const activeCityNames = useMemo(
     () =>
@@ -779,23 +782,51 @@ export default function App() {
       ),
     [activeCityCodes, cityNameMap]
   );
+  const selectedCityNames = useMemo(
+    () =>
+      selectedCityCodes.map(
+        (code) => cityNameMap.get(code) || CITY_CODE_LABELS[code] || code
+      ),
+    [selectedCityCodes, cityNameMap]
+  );
+  useEffect(() => {
+    if (!activeCityCodes.length) return;
+    setSelectedCityCodes((prev) => {
+      if (!prev.length) return activeCityCodes;
+      const availableSet = new Set(activeCityCodes);
+      const filtered = prev.filter((code) => availableSet.has(code));
+      return filtered.length ? filtered : activeCityCodes;
+    });
+  }, [activeCityCodes]);
   const displayShapeGeo = useMemo(() => {
     if (!shapeGeo?.features?.length) return shapeGeo;
-    if (!activeCityCodes.length) return shapeGeo;
-    const set = new Set(activeCityCodes);
+    if (!selectedCityCodes.length) return shapeGeo;
+    const set = new Set(selectedCityCodes);
     const features = shapeGeo.features.filter((f) => {
       const key = normalizeKeyString(f?.properties?.KEY_CODE);
       if (key.length < 5) return false;
       return set.has(key.slice(0, 5));
     });
     return { ...shapeGeo, features };
-  }, [shapeGeo, activeCityCodes]);
+  }, [shapeGeo, selectedCityCodes]);
   const areaCodeLengths = useMemo(
     () => getAreaCodeLengths(displayShapeGeo),
     [displayShapeGeo]
   );
+  const areaCodeLengthsAll = useMemo(
+    () => getAreaCodeLengths(shapeGeo),
+    [shapeGeo]
+  );
   const shapeKeySet = useMemo(() => {
     if (!displayShapeGeo?.features?.length) return null;
+    return new Set(
+      displayShapeGeo.features
+        .map((f) => normalizeKeyString(f?.properties?.KEY_CODE))
+        .filter(Boolean)
+    );
+  }, [displayShapeGeo]);
+  const shapeKeySetAll = useMemo(() => {
+    if (!shapeGeo?.features?.length) return null;
     return new Set(
       displayShapeGeo.features
         .map((f) => normalizeKeyString(f?.properties?.KEY_CODE))
@@ -1020,17 +1051,19 @@ export default function App() {
     select(svgRef.current).call(zoomRef.current.transform, zoomIdentity);
   };
 
-  // --- Data join / values per feature ---
-  const featureValue = useMemo(() => {
+  const buildFeatureValue = ({
+    targetCodes,
+    areaLengths,
+    keySet,
+  }) => {
     const map = new Map();
     const pushValue = (key, val) => {
       if (!key) return;
       map.set(key, val);
     };
 
-    if (!displayShapeGeo?.features?.length) return map;
-    const targetCityCodes = activeCityCodes.length
-      ? new Set(activeCityCodes)
+    const targetCityCodes = targetCodes?.length
+      ? new Set(targetCodes)
       : null;
     const isTargetCity = (key) => {
       if (!targetCityCodes) return true;
@@ -1043,11 +1076,7 @@ export default function App() {
 
       const byKey = new Map();
       for (const r of popRows) {
-        const key = buildCompositeKeyFromRow(
-          r,
-          areaCodeLengths,
-          shapeKeySet
-        );
+        const key = buildCompositeKeyFromRow(r, areaLengths, keySet);
         if (!key) continue;
         if (!isTargetCity(key)) continue;
 
@@ -1086,11 +1115,7 @@ export default function App() {
       if (!hhRows?.length) return map;
 
       for (const r of hhRows) {
-        const key = buildCompositeKeyFromRow(
-          r,
-          areaCodeLengths,
-          shapeKeySet
-        );
+        const key = buildCompositeKeyFromRow(r, areaLengths, keySet);
         if (!key) continue;
         if (!isTargetCity(key)) continue;
 
@@ -1107,11 +1132,7 @@ export default function App() {
       if (!bizRows?.length || !bizMetric) return map;
 
       for (const r of bizRows) {
-        const key = buildCompositeKeyFromRow(
-          r,
-          areaCodeLengths,
-          shapeKeySet
-        );
+        const key = buildCompositeKeyFromRow(r, areaLengths, keySet);
         if (!key) continue;
         if (!isTargetCity(key)) continue;
 
@@ -1130,11 +1151,7 @@ export default function App() {
     const temp = [];
 
     for (const r of hhRows) {
-      const key = buildCompositeKeyFromRow(
-        r,
-        areaCodeLengths,
-        shapeKeySet
-      );
+      const key = buildCompositeKeyFromRow(r, areaLengths, keySet);
       if (!key) continue;
       if (!isTargetCity(key)) continue;
 
@@ -1160,10 +1177,20 @@ export default function App() {
     }
 
     return map;
+  };
+
+  // --- Data join / values per feature ---
+  const featureValue = useMemo(() => {
+    if (!displayShapeGeo?.features?.length) return new Map();
+    return buildFeatureValue({
+      targetCodes: selectedCityCodes,
+      areaLengths: areaCodeLengths,
+      keySet: shapeKeySet,
+    });
   }, [
     mode,
     displayShapeGeo,
-    activeCityCodes,
+    selectedCityCodes,
     areaCodeLengths,
     shapeKeySet,
     popRows,
@@ -1177,15 +1204,44 @@ export default function App() {
     analysisMetric,
   ]);
 
+  const featureValueAll = useMemo(() => {
+    if (!shapeGeo?.features?.length) return new Map();
+    return buildFeatureValue({
+      targetCodes: activeCityCodes,
+      areaLengths: areaCodeLengthsAll,
+      keySet: shapeKeySetAll,
+    });
+  }, [
+    mode,
+    shapeGeo,
+    activeCityCodes,
+    areaCodeLengthsAll,
+    shapeKeySetAll,
+    popRows,
+    hhRows,
+    bizRows,
+    sexSel,
+    ageSel,
+    hhRowType,
+    hhMetric,
+    bizMetric,
+    analysisMetric,
+  ]);
+
   // --- Stats + color scale ---
   const valueStats = useMemo(() => {
-    if (!displayShapeGeo?.features?.length)
+    const scopeGeo =
+      scaleScope === 'all' ? shapeGeo : displayShapeGeo;
+    const scopeValues =
+      scaleScope === 'all' ? featureValueAll : featureValue;
+
+    if (!scopeGeo?.features?.length)
       return { min: 0, max: 1, mid: null };
 
     const vals = [];
-    for (const f of displayShapeGeo.features) {
+    for (const f of scopeGeo.features) {
       const k = normalizeKeyString(f?.properties?.KEY_CODE);
-      const v = featureValue.get(k);
+      const v = scopeValues.get(k);
       if (v === null || v === undefined || Number.isNaN(v)) continue;
       vals.push(Number(v));
     }
@@ -1195,7 +1251,14 @@ export default function App() {
 
     if (mode === 'analysis') return { min: mn ?? 0, max: mx ?? 1, mid: 1.0 };
     return { min: mn ?? 0, max: mx ?? 1, mid: null };
-  }, [mode, displayShapeGeo, featureValue]);
+  }, [
+    mode,
+    displayShapeGeo,
+    shapeGeo,
+    featureValue,
+    featureValueAll,
+    scaleScope,
+  ]);
 
   const colorForValue = useMemo(() => {
     const { min, max } = valueStats;
@@ -1269,9 +1332,9 @@ export default function App() {
   }, [stations, projection]);
 
   const cityLabel = useMemo(() => {
-    if (!activeCityNames.length) return '';
-    return `（${activeCityNames.join('・')}）`;
-  }, [activeCityNames]);
+    if (!selectedCityNames.length) return '';
+    return `（${selectedCityNames.join('・')}）`;
+  }, [selectedCityNames]);
 
   const winW = typeof window !== 'undefined' ? window.innerWidth : 1200;
   const winH = typeof window !== 'undefined' ? window.innerHeight : 800;
@@ -1315,8 +1378,12 @@ export default function App() {
                     key={`${k}_${idx}`}
                     d={pathGen(f)}
                     fill={fill}
-                    stroke="rgba(0,0,0,0.35)"
-                    strokeWidth={0.6 / transform.k}
+                    stroke={
+                      boldCityBoundary ? 'rgba(0,0,0,0.75)' : 'rgba(0,0,0,0.35)'
+                    }
+                    strokeWidth={
+                      (boldCityBoundary ? 1.2 : 0.6) / transform.k
+                    }
                     onMouseEnter={(e) => onFeatureEnter(e, f)}
                     onMouseMove={onFeatureMove}
                     onMouseLeave={onFeatureLeave}
@@ -1517,9 +1584,9 @@ export default function App() {
                   <li>人口: h03_27(茨木_人口).csv</li>
                   <li>世帯: h06_01_27(茨木_世帯).csv</li>
                 </ul>
-                {activeCityCodes.length ? (
+                {selectedCityCodes.length ? (
                   <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>
-                    対象市区町村コード: {activeCityCodes.join(' / ')}
+                    対象市区町村コード: {selectedCityCodes.join(' / ')}
                   </div>
                 ) : null}
                 {dataLoading ? (
@@ -1530,6 +1597,76 @@ export default function App() {
                 {shapeErr ? <ErrBox text={shapeErr} /> : null}
                 {popErr ? <ErrBox text={popErr} /> : null}
                 {hhErr ? <ErrBox text={hhErr} /> : null}
+              </Section>
+
+              <Section title="表示設定">
+                <label
+                  style={{ display: 'flex', gap: 10, alignItems: 'center' }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={boldCityBoundary}
+                    onChange={(e) => setBoldCityBoundary(e.target.checked)}
+                  />
+                  <span>市境を濃く表示</span>
+                </label>
+
+                <div style={{ marginTop: 10 }}>
+                  <div
+                    style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}
+                  >
+                    スケール範囲
+                  </div>
+                  <select
+                    value={scaleScope}
+                    onChange={(e) => setScaleScope(e.target.value)}
+                    style={selectStyle}
+                  >
+                    <option value="visible">表示中の範囲に合わせる</option>
+                    <option value="all">全市区町村の最大に合わせる</option>
+                  </select>
+                </div>
+              </Section>
+
+              <Section title="表示する市区町村">
+                {activeCityCodes.length ? (
+                  activeCityCodes.map((code) => {
+                    const label =
+                      cityNameMap.get(code) || CITY_CODE_LABELS[code] || code;
+                    const checked = selectedCityCodes.includes(code);
+                    return (
+                      <label
+                        key={code}
+                        style={{
+                          display: 'flex',
+                          gap: 8,
+                          alignItems: 'center',
+                          margin: '4px 0',
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={(e) => {
+                            setSelectedCityCodes((prev) => {
+                              const set = new Set(prev);
+                              if (e.target.checked) set.add(code);
+                              else set.delete(code);
+                              return Array.from(set);
+                            });
+                          }}
+                        />
+                        <span>
+                          {label}（{code}）
+                        </span>
+                      </label>
+                    );
+                  })
+                ) : (
+                  <div style={{ fontSize: 12, opacity: 0.75 }}>
+                    地図データ読み込み後に選択肢が表示されます。
+                  </div>
+                )}
               </Section>
 
               {/* Rail overlay */}
