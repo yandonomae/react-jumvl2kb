@@ -556,7 +556,17 @@ async function loadGeoJsonFromUrl(url) {
   if (!res.ok) {
     throw new Error(`市境データの取得に失敗しました (${res.status}) - ${url}`);
   }
-  return res.json();
+  const text = await res.text();
+  if (!text.trim()) {
+    throw new Error(`市境データが空です - ${url}`);
+  }
+  try {
+    return JSON.parse(text);
+  } catch (err) {
+    throw new Error(
+      `市境データのJSON解析に失敗しました (${url}): ${err?.message || err}`
+    );
+  }
 }
 
 async function loadCityBoundaryGeoJson() {
