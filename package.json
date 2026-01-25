@@ -3,39 +3,25 @@
   "version": "0.0.0",
   "private": true,
   "dependencies": {
-    "react": "^18.1.0",
-    "react-dom": "^18.1.0"
-  },
-  "scripts": {
-    "start": "react-scripts start",
-    "build": "react-scripts build",
-    "test": "react-scripts test --env=jsdom",
-    "eject": "react-scripts eject"
-  },
-  "browserslist": {
-    "production": [
-      ">0.2%",
-      "not dead",
-      "not op_mini all"
-    ],
-    "development": [
-      "last 1 chrome version",
-      "last 1 firefox version",
-      "last 1 safari version"
-    ]
-  },
-  "devDependencies": {
-    "react-scripts": "latest",
-    "papaparse": "^5.4.1",
-    "shpjs": "^6.1.0",
-
     "d3-array": "^3.2.4",
     "d3-geo": "^3.1.1",
     "d3-scale": "^4.0.2",
     "d3-scale-chromatic": "^3.1.0",
     "d3-selection": "^3.0.0",
+    "d3-transition": "^3.0.1",
     "d3-zoom": "^3.0.0",
-
-    "d3-transition": "^3.0.1"
+    "papaparse": "^5.4.1",
+    "react": "^18.1.0",
+    "react-dom": "^18.1.0",
+    "shpjs": "^6.1.0"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.2.1",
+    "vite": "^5.4.11"
   }
 }

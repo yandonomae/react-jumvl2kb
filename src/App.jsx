@@ -178,14 +178,7 @@ const RAIL_CONNECTORS = [
 const DEFAULT_MODE = 'population'; // population | household | business | analysis
 
 const resolvePublicUrl = (path) => {
-  const baseHref = process.env.PUBLIC_URL
-    ? new URL(
-        process.env.PUBLIC_URL.endsWith('/')
-          ? process.env.PUBLIC_URL
-          : `${process.env.PUBLIC_URL}/`,
-        window.location.href
-      )
-    : new URL('.', window.location.href);
+  const baseHref = new URL(import.meta.env.BASE_URL ?? '/', window.location.href);
   const normalizedPath = path.replace(/^\/+/, '');
   return new URL(normalizedPath, baseHref).toString();
 };
