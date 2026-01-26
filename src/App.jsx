@@ -1161,12 +1161,12 @@ function Legend({ mode, min, max, midLabel, layout }) {
 
   const verticalTicks = useMemo(() => {
     if (layout !== 'vertical') return [];
-    const safeMin = Number.isFinite(min) ? min : 0;
+    const safeMin = 0;
     const safeMax = Number.isFinite(roundedMax) ? roundedMax : 0;
     const span = safeMax - safeMin;
     const step = span === 0 ? 0 : span / 10;
     return Array.from({ length: 11 }, (_, i) => safeMin + step * i);
-  }, [layout, min, roundedMax]);
+  }, [layout, roundedMax]);
 
   const getColor = (t) => {
     if (mode === 'population') return interpolateYlOrRd(t);
@@ -1208,7 +1208,7 @@ function Legend({ mode, min, max, midLabel, layout }) {
         <svg
           width={verticalWidth}
           height={verticalHeight}
-          style={{ display: 'block' }}
+          style={{ display: 'block', marginTop: 6, marginBottom: 6 }}
         >
           <defs>
             <linearGradient id={gradientId} x1="0" y1="1" x2="0" y2="0">
