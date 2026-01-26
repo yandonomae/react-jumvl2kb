@@ -2181,11 +2181,13 @@ export default function App() {
     }
     if (mode === 'restaurant-analysis') {
       const { min, max } = valueStats;
-      const seq = scaleSequential(interpolateYlOrRd);
-      const mn = Number.isFinite(min) ? min : 0;
       const mx = Number.isFinite(max) ? max : 1;
-      seq.domain([mn, mx || 1]);
-      return (v) => seq(v);
+      const safeMax = mx > 0 ? mx : 1;
+      return (v) => {
+        if (!Number.isFinite(v) || v <= 0) return '#ffffff';
+        const t = Math.min(v / safeMax, 1);
+        return interpolateYlOrRd(t);
+      };
     }
     const { min, max } = valueStats;
 
