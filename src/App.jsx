@@ -749,53 +749,6 @@ function segmentsIntersect(ax, ay, bx, by, cx, cy, dx, dy) {
   return false;
 }
 
-function pointInRect(x, y, rect) {
-  return (
-    x >= rect.minX &&
-    x <= rect.maxX &&
-    y >= rect.minY &&
-    y <= rect.maxY
-  );
-}
-
-function lineIntersectsRect(segment, rect) {
-  if (
-    segment.maxX < rect.minX ||
-    segment.minX > rect.maxX ||
-    segment.maxY < rect.minY ||
-    segment.minY > rect.maxY
-  ) {
-    return false;
-  }
-
-  if (
-    pointInRect(segment.x1, segment.y1, rect) ||
-    pointInRect(segment.x2, segment.y2, rect)
-  ) {
-    return true;
-  }
-
-  const edges = [
-    [rect.minX, rect.minY, rect.maxX, rect.minY],
-    [rect.maxX, rect.minY, rect.maxX, rect.maxY],
-    [rect.maxX, rect.maxY, rect.minX, rect.maxY],
-    [rect.minX, rect.maxY, rect.minX, rect.minY],
-  ];
-
-  return edges.some(([ex1, ey1, ex2, ey2]) =>
-    segmentsIntersect(
-      segment.x1,
-      segment.y1,
-      segment.x2,
-      segment.y2,
-      ex1,
-      ey1,
-      ex2,
-      ey2
-    )
-  );
-}
-
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -2095,33 +2048,6 @@ export default function App() {
     return points;
   }, [restaurantRows, selectedCityCodes]);
 
-  const railSegments = useMemo(() => {
-    if (!projection || !railGeo?.features?.length) return [];
-    const segments = [];
-    for (const feature of railGeo.features) {
-      const coords = feature?.geometry?.coordinates;
-      if (!Array.isArray(coords)) continue;
-      for (let i = 0; i < coords.length - 1; i += 1) {
-        const p1 = projection(coords[i]);
-        const p2 = projection(coords[i + 1]);
-        if (!p1 || !p2) continue;
-        const [x1, y1] = p1;
-        const [x2, y2] = p2;
-        segments.push({
-          x1,
-          y1,
-          x2,
-          y2,
-          minX: Math.min(x1, x2),
-          maxX: Math.max(x1, x2),
-          minY: Math.min(y1, y2),
-          maxY: Math.max(y1, y2),
-        });
-      }
-    }
-    return segments;
-  }, [railGeo, projection]);
-
   const restaurantGrid = useMemo(() => {
     if (mode !== 'restaurant-analysis') return [];
     if (!projection) return [];
@@ -2153,14 +2079,16 @@ export default function App() {
     const lonStep =
       RESTAURANT_GRID_SIZE_METERS / (metersPerDegLon || metersPerDegLat);
 
-    const isInsideBoundary = (lon, lat) =>
-      cityBoundaryFeatures.some((feature) =>
-        geoContains(feature, [lon, lat])
-      );
-
     const countMap = new Map();
     for (const point of restaurantGeoPoints) {
-      if (!isInsideBoundary(point.lon, point.lat)) continue;
+      if (
+        point.lon < minLon ||
+        point.lon > maxLon ||
+        point.lat < minLat ||
+        point.lat > maxLat
+      ) {
+        continue;
+      }
       const xIndex = Math.floor((point.lon - minLon) / lonStep);
       const yIndex = Math.floor((point.lat - minLat) / latStep);
       if (xIndex < 0 || yIndex < 0) continue;
@@ -2176,10 +2104,6 @@ export default function App() {
       const lat = minLat + y * latStep;
       for (let x = 0; x <= maxX; x += 1) {
         const lon = minLon + x * lonStep;
-        const centerLon = lon + lonStep / 2;
-        const centerLatCell = lat + latStep / 2;
-        if (!isInsideBoundary(centerLon, centerLatCell)) continue;
-
         const p0 = projection([lon, lat]);
         const p1 = projection([lon + lonStep, lat + latStep]);
         if (!p0 || !p1) continue;
@@ -2190,13 +2114,6 @@ export default function App() {
           minY: Math.min(p0[1], p1[1]),
           maxY: Math.max(p0[1], p1[1]),
         };
-
-        if (railSegments.length) {
-          const hasLine = railSegments.some((segment) =>
-            lineIntersectsRect(segment, rect)
-          );
-          if (!hasLine) continue;
-        }
 
         const key = `${x}_${y}`;
         const count = countMap.get(key) ?? 0;
@@ -2216,7 +2133,6 @@ export default function App() {
     projection,
     restaurantGeoPoints,
     cityBoundaryFeatures,
-    railSegments,
   ]);
 
   // --- Stats + color scale ---
@@ -3290,7 +3206,8 @@ export default function App() {
                         125m × 125m の格子内に含まれる飲食店数で塗り分けます。
                       </div>
                       <div style={{ marginTop: 8, fontSize: 12, opacity: 0.85 }}>
-                        市境内かつ路線が載っている格子のみ描画対象です。
+                        表示中の市境の最北・最南・最東・最西を含む範囲で格子を作成し、
+                        その全てを計算対象にしています。
                       </div>
                       <div style={{ marginTop: 10, fontSize: 12 }}>
                         対象件数: {restaurantGeoPoints.length}件
