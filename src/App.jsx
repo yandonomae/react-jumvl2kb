@@ -1455,6 +1455,7 @@ export default function App() {
   const [ridershipIconSize, setRidershipIconSize] = useState(
     RIDERSHIP_ICON_DEFAULT_SIZE
   );
+  const [ridershipIconAspect, setRidershipIconAspect] = useState(1);
   const [ridershipIndicatorOffsets, setRidershipIndicatorOffsets] = useState(
     {}
   );
@@ -2219,6 +2220,23 @@ export default function App() {
     () => resolvePublicUrl('data/人員.png'),
     []
   );
+  const ridershipIconWidth = useMemo(
+    () => ridershipIconSize * ridershipIconAspect,
+    [ridershipIconAspect, ridershipIconSize]
+  );
+
+  useEffect(() => {
+    const img = new Image();
+    img.onload = () => {
+      if (img.naturalHeight > 0) {
+        setRidershipIconAspect(img.naturalWidth / img.naturalHeight);
+      }
+    };
+    img.src = ridershipIconUrl;
+    return () => {
+      img.onload = null;
+    };
+  }, [ridershipIconUrl]);
 
   const restaurantPoints = useMemo(() => {
     if (!restaurantRows?.length || !projection) return [];
@@ -2966,7 +2984,7 @@ export default function App() {
                       flexWrap: 'wrap',
                       gap: RIDERSHIP_ICON_GAP,
                       width:
-                        ridershipIconSize * RIDERSHIP_ICON_ROW_COUNT +
+                        ridershipIconWidth * RIDERSHIP_ICON_ROW_COUNT +
                         RIDERSHIP_ICON_GAP * (RIDERSHIP_ICON_ROW_COUNT - 1),
                     }}
                   >
@@ -2975,7 +2993,7 @@ export default function App() {
                         <div
                           key={`${station.id}-icon-${index}`}
                           style={{
-                            width: ridershipIconSize * part.fraction,
+                            width: ridershipIconWidth * part.fraction,
                             height: ridershipIconSize,
                             overflow: 'hidden',
                           }}
@@ -2984,9 +3002,10 @@ export default function App() {
                             src={ridershipIconUrl}
                             alt=""
                             style={{
-                              width: ridershipIconSize,
+                              width: ridershipIconWidth,
                               height: ridershipIconSize,
                               display: 'block',
+                              objectFit: 'contain',
                             }}
                           />
                         </div>
