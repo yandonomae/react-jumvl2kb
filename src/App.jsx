@@ -430,6 +430,10 @@ const DEFAULT_DATA_FILES = {
   householdCsv: resolvePublicUrl('data/h06_01_27(茨木_世帯).csv'),
   restaurantSuitaCsv: resolvePublicUrl('data/飲食店_吹田.csv'),
   restaurantToyonakaCsv: resolvePublicUrl('data/飲食店_豊中.csv'),
+  restaurantSuitaGeoCsv: resolvePublicUrl('data/飲食店_吹田_緯度経度付き.csv'),
+  restaurantToyonakaGeoCsv: resolvePublicUrl(
+    'data/飲食店_豊中_緯度経度付き.csv'
+  ),
 };
 
 const TARGET_CITY_CODES = ['27211', '27207', '27205', '27203'];
@@ -1331,6 +1335,15 @@ export default function App() {
         throw new Error('地図データのパスが指定されていません');
       };
 
+      const loadRestaurantCsv = async (primaryUrl, fallbackUrl) => {
+        try {
+          return await fetchBuffer(primaryUrl);
+        } catch (primaryError) {
+          if (!fallbackUrl) throw primaryError;
+          return fetchBuffer(fallbackUrl);
+        }
+      };
+
       const [
         shapeRes,
         popRes,
@@ -1338,15 +1351,20 @@ export default function App() {
         restaurantSuitaRes,
         restaurantToyonakaRes,
         boundaryRes,
-      ] =
-        await Promise.allSettled([
-          loadShape(),
-          fetchBuffer(DEFAULT_DATA_FILES.populationCsv),
-          fetchBuffer(DEFAULT_DATA_FILES.householdCsv),
-          fetchBuffer(DEFAULT_DATA_FILES.restaurantSuitaCsv),
-          fetchBuffer(DEFAULT_DATA_FILES.restaurantToyonakaCsv),
-          loadCityBoundaryGeoJson(),
-        ]);
+      ] = await Promise.allSettled([
+        loadShape(),
+        fetchBuffer(DEFAULT_DATA_FILES.populationCsv),
+        fetchBuffer(DEFAULT_DATA_FILES.householdCsv),
+        loadRestaurantCsv(
+          DEFAULT_DATA_FILES.restaurantSuitaGeoCsv,
+          DEFAULT_DATA_FILES.restaurantSuitaCsv
+        ),
+        loadRestaurantCsv(
+          DEFAULT_DATA_FILES.restaurantToyonakaGeoCsv,
+          DEFAULT_DATA_FILES.restaurantToyonakaCsv
+        ),
+        loadCityBoundaryGeoJson(),
+      ]);
 
       if (!active) return;
 
