@@ -1439,6 +1439,7 @@ export default function App() {
   const [restaurantRadius, setRestaurantRadius] = useState(4);
   const [showStationCatchment, setShowStationCatchment] = useState(false);
   const [boldCityBoundary, setBoldCityBoundary] = useState(false);
+  const [showBaseMapLayer, setShowBaseMapLayer] = useState(true);
   const [scaleScope, setScaleScope] = useState('visible'); // visible | all
 
   // 人口
@@ -2683,6 +2684,8 @@ export default function App() {
   const winH = typeof window !== 'undefined' ? window.innerHeight : 800;
   const isRestaurantLikeMode =
     mode === 'restaurant' || mode === 'restaurant-analysis';
+  const isBaseMapToggleMode = mode === 'restaurant' || mode === 'ridership';
+  const showPlainBaseMapLayer = isBaseMapToggleMode && showBaseMapLayer;
 
   const handleRestaurantGeocode = async () => {
     if (!restaurantRows?.length || restaurantGeoRunning) return;
@@ -2855,44 +2858,46 @@ export default function App() {
               ) : null}
 
               {/* Choropleth polygons */}
-              {displayShapeGeo.features.map((f, idx) => {
-                const k = normalizeKeyString(f?.properties?.KEY_CODE);
-                const v = featureValue.get(k);
-                const hasV = v !== null && v !== undefined && !Number.isNaN(v);
-                const fill =
-                  mode === 'restaurant-analysis'
-                    ? 'transparent'
-                    : isRestaurantLikeMode
-                    ? '#f4f4f4'
-                    : hasV
-                    ? colorForValue(Number(v))
-                    : '#f2f2f2';
+              {(!isBaseMapToggleMode || showPlainBaseMapLayer) &&
+                displayShapeGeo.features.map((f, idx) => {
+                  const k = normalizeKeyString(f?.properties?.KEY_CODE);
+                  const v = featureValue.get(k);
+                  const hasV =
+                    v !== null && v !== undefined && !Number.isNaN(v);
+                  const fill =
+                    mode === 'restaurant-analysis'
+                      ? 'transparent'
+                      : isRestaurantLikeMode
+                      ? '#f4f4f4'
+                      : hasV
+                      ? colorForValue(Number(v))
+                      : '#f2f2f2';
 
-                return (
-                  <path
-                    key={`${k}_${idx}`}
-                    d={pathGen(f)}
-                    fill={fill}
-                    stroke={
-                      boldCityBoundary
-                        ? 'rgba(0,0,0,0.18)'
-                        : 'rgba(0,0,0,0.35)'
-                    }
-                    strokeWidth={0.6 / transform.k}
-                    onMouseEnter={
-                      isRestaurantLikeMode
-                        ? undefined
-                        : (e) => onFeatureEnter(e, f)
-                    }
-                    onMouseMove={
-                      isRestaurantLikeMode ? undefined : onFeatureMove
-                    }
-                    onMouseLeave={
-                      isRestaurantLikeMode ? undefined : onFeatureLeave
-                    }
-                  />
-                );
-              })}
+                  return (
+                    <path
+                      key={`${k}_${idx}`}
+                      d={pathGen(f)}
+                      fill={fill}
+                      stroke={
+                        boldCityBoundary
+                          ? 'rgba(0,0,0,0.18)'
+                          : 'rgba(0,0,0,0.35)'
+                      }
+                      strokeWidth={0.6 / transform.k}
+                      onMouseEnter={
+                        isRestaurantLikeMode
+                          ? undefined
+                          : (e) => onFeatureEnter(e, f)
+                      }
+                      onMouseMove={
+                        isRestaurantLikeMode ? undefined : onFeatureMove
+                      }
+                      onMouseLeave={
+                        isRestaurantLikeMode ? undefined : onFeatureLeave
+                      }
+                    />
+                  );
+                })}
 
               {boldCityBoundary && cityBoundaryFeatures.length
                 ? cityBoundaryFeatures.map((feature, idx) => (
@@ -3440,6 +3445,23 @@ export default function App() {
                   />
                   <span>市境を濃く表示</span>
                 </label>
+                {isBaseMapToggleMode && (
+                  <label
+                    style={{
+                      display: 'flex',
+                      gap: 10,
+                      alignItems: 'center',
+                      marginTop: 6,
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={showBaseMapLayer}
+                      onChange={(e) => setShowBaseMapLayer(e.target.checked)}
+                    />
+                    <span>普通の地図を最下層に表示</span>
+                  </label>
+                )}
 
                 <div style={{ marginTop: 10 }}>
                   <div
