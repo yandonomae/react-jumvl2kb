@@ -1139,8 +1139,10 @@ function HouseholdTree({ node, selectedKey, onSelect, availableColumns }) {
 function Legend({ mode, min, max, midLabel, layout }) {
   const width = 220;
   const height = 12;
-  const verticalHeight = 180;
+  const verticalHeight = 190;
   const verticalWidth = 180;
+  const verticalPadding = 8;
+  const verticalUsableHeight = verticalHeight - verticalPadding * 2;
 
   const stops = useMemo(() => {
     const n = 16;
@@ -1208,7 +1210,7 @@ function Legend({ mode, min, max, midLabel, layout }) {
         <svg
           width={verticalWidth}
           height={verticalHeight}
-          style={{ display: 'block', marginTop: 6, marginBottom: 6 }}
+          style={{ display: 'block' }}
         >
           <defs>
             <linearGradient id={gradientId} x1="0" y1="1" x2="0" y2="0">
@@ -1219,16 +1221,17 @@ function Legend({ mode, min, max, midLabel, layout }) {
           </defs>
           <rect
             x={0}
-            y={0}
+            y={verticalPadding}
             width={16}
-            height={verticalHeight}
+            height={verticalUsableHeight}
             fill={`url(#${gradientId})`}
             rx={6}
           />
           {verticalTicks.map((tick, index) => {
             const y =
               verticalHeight -
-              (index / (verticalTicks.length - 1)) * verticalHeight;
+              verticalPadding -
+              (index / (verticalTicks.length - 1)) * verticalUsableHeight;
             return (
               <g key={`tick-${index}`}>
                 <line
