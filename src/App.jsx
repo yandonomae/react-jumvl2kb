@@ -417,9 +417,70 @@ const RAIL_CONNECTORS = [
   },
 ];
 
-const DEFAULT_MODE = 'population'; // population | household | business | analysis | restaurant | restaurant-analysis
+const RIDERSHIP_BY_STATION_ID = {
+  saito_万博記念公園: 20294,
+  saito_公園東口: 1598,
+  saito_阪大病院前: 9814,
+  saito_豊川: 3062,
+  saito_彩都西: 10814,
+  mono_大阪空港: 17248,
+  mono_蛍池: 29592,
+  mono_柴原阪大前: 9834,
+  mono_小路: 13322,
+  mono_千里中央: 40716,
+  mono_山田: 19580,
+  mono_万博記念公園: 20294,
+  mono_宇野辺: 8078,
+  mono_南茨木: 31274,
+  mono_沢良宣: 4364,
+  mono_摂津: 5704,
+  hk_摂津市: 10922,
+  hk_南茨木: 39188,
+  hk_茨木市: 53322,
+  hk_総持寺: 12493,
+  hk_富田: 15598,
+  jr_東淀川: 14492,
+  jr_吹田: 44262,
+  jr_岸辺: 39978,
+  jr_千里丘: 38768,
+  jr_茨木: 86856,
+  jr_JR総持寺: 19450,
+  jr_摂津富田: 36756,
+  os_東淀川: 14492,
+  os_南吹田: 6890,
+  os_JR淡路: 20688,
+  hs_下新庄: 7577,
+  hs_吹田: 14197,
+  hs_豊津: 12780,
+  hs_関大前: 23665,
+  hs_千里山: 15426,
+  hs_南千里: 18541,
+  hs_山田: 22596,
+  hs_北千里: 22069,
+  ht_石橋阪大前: 39177,
+  ht_蛍池: 38675,
+  ht_豊中: 42613,
+  ht_岡町: 15876,
+  ht_曽根: 21762,
+  ht_服部天神: 21397,
+  ht_庄内: 24867,
+  ht_三国: 24390,
+  nk_東三国: 36365,
+  nk_江坂: 85538,
+  nk_緑地公園: 32503,
+  nk_桃山台: 36050,
+  nk_千里中央: 69342,
+  nk_箕面船場阪大前: 14095,
+  nk_箕面萱野: 19985,
+};
+
+const DEFAULT_MODE = 'population'; // population | household | business | analysis | restaurant | restaurant-analysis | ridership
 
 const RESTAURANT_GRID_SIZE_METERS = 250;
+const RIDERSHIP_ICON_STEP = 5000;
+const RIDERSHIP_ICON_DEFAULT_SIZE = 18;
+const RIDERSHIP_ICON_GAP = 4;
+const RIDERSHIP_ICON_ROW_COUNT = 5;
 
 const resolvePublicUrl = (path) => {
   const baseHref = new URL(import.meta.env.BASE_URL ?? '/', window.location.href);
@@ -530,6 +591,20 @@ function safeToNumber(v) {
   const cleaned = s.replace(/,/g, '');
   const num = Number(cleaned);
   return Number.isFinite(num) ? num : null;
+}
+
+function buildRidershipIconFragments(value) {
+  if (!Number.isFinite(value) || value <= 0) return [];
+  const ratio = value / RIDERSHIP_ICON_STEP;
+  const full = Math.floor(ratio);
+  const remainder = ratio - full;
+  const parts = Array.from({ length: full }, () => ({
+    fraction: 1,
+  }));
+  if (remainder > 0) {
+    parts.push({ fraction: remainder });
+  }
+  return parts;
 }
 
 function parseBudgetValue(raw) {
@@ -1376,6 +1451,17 @@ export default function App() {
   const [stationIndicators, setStationIndicators] = useState({});
   const [draggingIndicator, setDraggingIndicator] = useState(null);
 
+  // 乗降客数インジケーター
+  const [ridershipIconSize, setRidershipIconSize] = useState(
+    RIDERSHIP_ICON_DEFAULT_SIZE
+  );
+  const [ridershipIconAspect, setRidershipIconAspect] = useState(1);
+  const [ridershipIndicatorOffsets, setRidershipIndicatorOffsets] = useState(
+    {}
+  );
+  const [draggingRidershipIndicator, setDraggingRidershipIndicator] =
+    useState(null);
+
   // Tooltip
   const [hover, setHover] = useState({
     visible: false,
@@ -1802,6 +1888,35 @@ export default function App() {
     };
   }, [draggingIndicator]);
 
+  useEffect(() => {
+    if (!draggingRidershipIndicator) return undefined;
+    const handleMove = (e) => {
+      setRidershipIndicatorOffsets((prev) => {
+        const current = prev[draggingRidershipIndicator.id] || {
+          offsetX: 12,
+          offsetY: -12,
+        };
+        const dx = e.clientX - draggingRidershipIndicator.startX;
+        const dy = e.clientY - draggingRidershipIndicator.startY;
+        return {
+          ...prev,
+          [draggingRidershipIndicator.id]: {
+            ...current,
+            offsetX: draggingRidershipIndicator.originX + dx,
+            offsetY: draggingRidershipIndicator.originY + dy,
+          },
+        };
+      });
+    };
+    const handleUp = () => setDraggingRidershipIndicator(null);
+    window.addEventListener('mousemove', handleMove);
+    window.addEventListener('mouseup', handleUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMove);
+      window.removeEventListener('mouseup', handleUp);
+    };
+  }, [draggingRidershipIndicator]);
+
   const zoomIn = () => {
     if (!svgRef.current || !zoomRef.current) return;
     select(svgRef.current).call(zoomRef.current.scaleBy, 1.25);
@@ -1826,7 +1941,12 @@ export default function App() {
       map.set(key, val);
     };
 
-    if (mode === 'restaurant' || mode === 'restaurant-analysis') return map;
+    if (
+      mode === 'restaurant' ||
+      mode === 'restaurant-analysis' ||
+      mode === 'ridership'
+    )
+      return map;
 
     const targetCityCodes = targetCodes?.length
       ? new Set(targetCodes)
@@ -2095,6 +2215,28 @@ export default function App() {
       ),
     [stationScreenPoints]
   );
+  // 乗降客数アイコンは /data/人員.png を参照（画像は外部で差し替え可能）
+  const ridershipIconUrl = useMemo(
+    () => resolvePublicUrl('data/人員.png'),
+    []
+  );
+  const ridershipIconWidth = useMemo(
+    () => ridershipIconSize * ridershipIconAspect,
+    [ridershipIconAspect, ridershipIconSize]
+  );
+
+  useEffect(() => {
+    const img = new Image();
+    img.onload = () => {
+      if (img.naturalHeight > 0) {
+        setRidershipIconAspect(img.naturalWidth / img.naturalHeight);
+      }
+    };
+    img.src = ridershipIconUrl;
+    return () => {
+      img.onload = null;
+    };
+  }, [ridershipIconUrl]);
 
   const restaurantPoints = useMemo(() => {
     if (!restaurantRows?.length || !projection) return [];
@@ -2362,7 +2504,8 @@ export default function App() {
 
   // --- Stats + color scale ---
   const valueStats = useMemo(() => {
-    if (mode === 'restaurant') return { min: 0, max: 1, mid: null };
+    if (mode === 'restaurant' || mode === 'ridership')
+      return { min: 0, max: 1, mid: null };
     if (mode === 'restaurant-analysis') {
       if (!restaurantGrid.length) return { min: 0, max: 1, mid: null };
       const counts = restaurantGrid.map((cell) => cell.count);
@@ -2401,7 +2544,7 @@ export default function App() {
   ]);
 
   const colorForValue = useMemo(() => {
-    if (mode === 'restaurant') {
+    if (mode === 'restaurant' || mode === 'ridership') {
       return () => '#f4f4f4';
     }
     if (mode === 'restaurant-analysis') {
@@ -2751,7 +2894,7 @@ export default function App() {
               )}
 
               {/* Station labels (topmost) */}
-              {showRail
+              {showRail && mode !== 'ridership'
                 ? stationPoints.map((s) => (
                     <text
                       key={`station-label-${s.id}`}
@@ -2771,6 +2914,111 @@ export default function App() {
             </g>
           )}
         </svg>
+
+        {mode === 'ridership' && showRail ? (
+          <div
+            style={{
+              position: 'absolute',
+              left: 0,
+              top: 0,
+              width: '100%',
+              height: '100%',
+              pointerEvents: 'none',
+            }}
+          >
+            {stationScreenPoints.map((station) => {
+              const ridership = RIDERSHIP_BY_STATION_ID[station.id];
+              const iconParts = buildRidershipIconFragments(ridership ?? 0);
+              const offset = ridershipIndicatorOffsets[station.id] || {
+                offsetX: 12,
+                offsetY: -12,
+              };
+              return (
+                <div
+                  key={`ridership-${station.id}`}
+                  style={{
+                    position: 'absolute',
+                    left: station.screenX + offset.offsetX,
+                    top: station.screenY + offset.offsetY,
+                    transform: 'translateY(-100%)',
+                    background: '#fff',
+                    borderRadius: 10,
+                    border: '1px solid rgba(0,0,0,0.15)',
+                    padding: '8px 10px',
+                    boxShadow: '0 6px 16px rgba(0,0,0,0.12)',
+                    minWidth: 160,
+                    fontSize: 12,
+                    lineHeight: 1.4,
+                    pointerEvents: 'auto',
+                  }}
+                >
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      fontWeight: 800,
+                      cursor: 'move',
+                    }}
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setDraggingRidershipIndicator({
+                        id: station.id,
+                        startX: e.clientX,
+                        startY: e.clientY,
+                        originX: offset.offsetX,
+                        originY: offset.offsetY,
+                      });
+                    }}
+                  >
+                    <span>{station.name}</span>
+                  </div>
+                  <div style={{ marginTop: 4, fontWeight: 700 }}>
+                    乗降客数: {formatNumber(ridership)}
+                  </div>
+                  <div
+                    style={{
+                      marginTop: 6,
+                      display: 'flex',
+                      flexWrap: 'wrap',
+                      gap: RIDERSHIP_ICON_GAP,
+                      width:
+                        ridershipIconWidth * RIDERSHIP_ICON_ROW_COUNT +
+                        RIDERSHIP_ICON_GAP * (RIDERSHIP_ICON_ROW_COUNT - 1),
+                    }}
+                  >
+                    {iconParts.length ? (
+                      iconParts.map((part, index) => (
+                        <div
+                          key={`${station.id}-icon-${index}`}
+                          style={{
+                            width: ridershipIconWidth * part.fraction,
+                            height: ridershipIconSize,
+                            overflow: 'hidden',
+                          }}
+                        >
+                          <img
+                            src={ridershipIconUrl}
+                            alt=""
+                            style={{
+                              width: ridershipIconWidth,
+                              height: ridershipIconSize,
+                              display: 'block',
+                              objectFit: 'contain',
+                            }}
+                          />
+                        </div>
+                      ))
+                    ) : (
+                      <div style={{ opacity: 0.6 }}>データなし</div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : null}
 
         {showStationCatchment && Object.keys(stationIndicators).length ? (
           <div
@@ -2985,7 +3233,7 @@ export default function App() {
               <div
                 style={{
                   display: 'grid',
-                  gridTemplateColumns: 'repeat(6, 1fr)',
+                  gridTemplateColumns: 'repeat(7, 1fr)',
                   gap: 6,
                   marginBottom: 12,
                 }}
@@ -3019,6 +3267,11 @@ export default function App() {
                   label="飲食店分析"
                   active={mode === 'restaurant-analysis'}
                   onClick={() => setMode('restaurant-analysis')}
+                />
+                <ModeBtn
+                  label="乗降客数"
+                  active={mode === 'ridership'}
+                  onClick={() => setMode('ridership')}
                 />
               </div>
 
@@ -3214,6 +3467,28 @@ export default function App() {
                   />
                   <div style={{ fontSize: 12, opacity: 0.8, marginTop: 4 }}>
                     現在: {stationRadius}px
+                  </div>
+                </div>
+
+                <div style={{ marginTop: 10 }}>
+                  <div
+                    style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}
+                  >
+                    乗降客数アイコンサイズ
+                  </div>
+                  <input
+                    type="range"
+                    min={8}
+                    max={40}
+                    step={1}
+                    value={ridershipIconSize}
+                    onChange={(e) =>
+                      setRidershipIconSize(Number(e.target.value))
+                    }
+                    style={{ width: '100%' }}
+                  />
+                  <div style={{ fontSize: 12, opacity: 0.8, marginTop: 4 }}>
+                    現在: {ridershipIconSize}px
                   </div>
                 </div>
               </Section>
@@ -3709,7 +3984,7 @@ export default function App() {
         </div>
 
         {/* Legend */}
-        {displayShapeGeo && mode !== 'restaurant' && (
+        {displayShapeGeo && mode !== 'restaurant' && mode !== 'ridership' && (
           <Legend
             mode={mode}
             min={valueStats.min}
