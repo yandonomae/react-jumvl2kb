@@ -413,7 +413,7 @@ const RAIL_CONNECTORS = [
 
 const DEFAULT_MODE = 'population'; // population | household | business | analysis | restaurant | restaurant-analysis
 
-const RESTAURANT_GRID_SIZE_METERS = 125;
+const RESTAURANT_GRID_SIZE_METERS = 250;
 
 const resolvePublicUrl = (path) => {
   const baseHref = new URL(import.meta.env.BASE_URL ?? '/', window.location.href);
@@ -2341,13 +2341,44 @@ export default function App() {
             <g
               transform={`translate(${transform.x},${transform.y}) scale(${transform.k})`}
             >
+              {mode === 'restaurant-analysis' && restaurantGrid.length ? (
+                <g>
+                  {restaurantGrid.map((cell) => (
+                    <rect
+                      key={cell.id}
+                      x={cell.x}
+                      y={cell.y}
+                      width={cell.width}
+                      height={cell.height}
+                      fill={colorForValue(cell.count)}
+                      fillOpacity={0.85}
+                      onMouseEnter={(e) => {
+                        setHover({
+                          visible: true,
+                          x: e.clientX,
+                          y: e.clientY,
+                          title: '飲食店分析（250m格子）',
+                          lines: [
+                            `飲食店数: ${formatNumber(cell.count)}`,
+                          ],
+                        });
+                      }}
+                      onMouseMove={onFeatureMove}
+                      onMouseLeave={onFeatureLeave}
+                    />
+                  ))}
+                </g>
+              ) : null}
+
               {/* Choropleth polygons */}
               {displayShapeGeo.features.map((f, idx) => {
                 const k = normalizeKeyString(f?.properties?.KEY_CODE);
                 const v = featureValue.get(k);
                 const hasV = v !== null && v !== undefined && !Number.isNaN(v);
                 const fill =
-                  isRestaurantLikeMode
+                  mode === 'restaurant-analysis'
+                    ? 'transparent'
+                    : isRestaurantLikeMode
                     ? '#f4f4f4'
                     : hasV
                     ? colorForValue(Number(v))
@@ -2378,37 +2409,6 @@ export default function App() {
                   />
                 );
               })}
-
-              {mode === 'restaurant-analysis' && restaurantGrid.length ? (
-                <g>
-                  {restaurantGrid.map((cell) => (
-                    <rect
-                      key={cell.id}
-                      x={cell.x}
-                      y={cell.y}
-                      width={cell.width}
-                      height={cell.height}
-                      fill={colorForValue(cell.count)}
-                      fillOpacity={0.85}
-                      stroke="rgba(0,0,0,0.18)"
-                      strokeWidth={0.6 / transform.k}
-                      onMouseEnter={(e) => {
-                        setHover({
-                          visible: true,
-                          x: e.clientX,
-                          y: e.clientY,
-                          title: '飲食店分析（125m格子）',
-                          lines: [
-                            `飲食店数: ${formatNumber(cell.count)}`,
-                          ],
-                        });
-                      }}
-                      onMouseMove={onFeatureMove}
-                      onMouseLeave={onFeatureLeave}
-                    />
-                  ))}
-                </g>
-              ) : null}
 
               {boldCityBoundary && cityBoundaryFeatures.length
                 ? cityBoundaryFeatures.map((feature, idx) => (
@@ -3195,7 +3195,7 @@ export default function App() {
               )}
 
               {mode === 'restaurant-analysis' && (
-                <Section title="飲食店分析（125m格子ヒートマップ）">
+                <Section title="飲食店分析（250m格子ヒートマップ）">
                   {!restaurantGeoPoints.length ? (
                     <div style={{ fontSize: 12, opacity: 0.75 }}>
                       緯度・経度付きの飲食店データが読み込まれていません。
@@ -3203,7 +3203,7 @@ export default function App() {
                   ) : (
                     <>
                       <div style={{ fontSize: 12, opacity: 0.85 }}>
-                        125m × 125m の格子内に含まれる飲食店数で塗り分けます。
+                        250m × 250m の格子内に含まれる飲食店数で塗り分けます。
                       </div>
                       <div style={{ marginTop: 8, fontSize: 12, opacity: 0.85 }}>
                         表示中の市境の最北・最南・最東・最西を含む範囲で格子を作成し、
