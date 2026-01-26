@@ -1136,9 +1136,11 @@ function HouseholdTree({ node, selectedKey, onSelect, availableColumns }) {
   );
 }
 
-function Legend({ mode, min, max, midLabel }) {
+function Legend({ mode, min, max, midLabel, layout }) {
   const width = 220;
   const height = 12;
+  const verticalHeight = 180;
+  const verticalWidth = 180;
 
   const stops = useMemo(() => {
     const n = 16;
@@ -1148,6 +1150,23 @@ function Legend({ mode, min, max, midLabel }) {
   }, []);
 
   const gradientId = `grad_${mode}`;
+
+  const roundedMax = useMemo(() => {
+    if (!Number.isFinite(max)) return max;
+    if (max === 0) return 0;
+    const absMax = Math.abs(max);
+    const magnitude = 10 ** Math.floor(Math.log10(absMax));
+    return Math.ceil(max / magnitude) * magnitude;
+  }, [max]);
+
+  const verticalTicks = useMemo(() => {
+    if (layout !== 'vertical') return [];
+    const safeMin = 0;
+    const safeMax = Number.isFinite(roundedMax) ? roundedMax : 0;
+    const span = safeMax - safeMin;
+    const step = span === 0 ? 0 : span / 10;
+    return Array.from({ length: 11 }, (_, i) => safeMin + step * i);
+  }, [layout, roundedMax]);
 
   const getColor = (t) => {
     if (mode === 'population') return interpolateYlOrRd(t);
@@ -1185,35 +1204,87 @@ function Legend({ mode, min, max, midLabel }) {
           : '分析（特化係数）'}
         ）
       </div>
-      <svg width={width} height={height} style={{ display: 'block' }}>
-        <defs>
-          <linearGradient id={gradientId} x1="0" y1="0" x2="1" y2="0">
-            {stops.map((t) => (
-              <stop key={t} offset={`${t * 100}%`} stopColor={getColor(t)} />
-            ))}
-          </linearGradient>
-        </defs>
-        <rect
-          x={0}
-          y={0}
-          width={width}
-          height={height}
-          fill={`url(#${gradientId})`}
-          rx={6}
-        />
-      </svg>
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          marginTop: 6,
-          fontSize: 12,
-        }}
-      >
-        <span>min: {formatNumber(min)}</span>
-        {midLabel ? <span>{midLabel}</span> : <span />}
-        <span>max: {formatNumber(max)}</span>
-      </div>
+      {layout === 'vertical' ? (
+        <svg
+          width={verticalWidth}
+          height={verticalHeight}
+          style={{ display: 'block', marginTop: 6, marginBottom: 6 }}
+        >
+          <defs>
+            <linearGradient id={gradientId} x1="0" y1="1" x2="0" y2="0">
+              {stops.map((t) => (
+                <stop key={t} offset={`${t * 100}%`} stopColor={getColor(t)} />
+              ))}
+            </linearGradient>
+          </defs>
+          <rect
+            x={0}
+            y={0}
+            width={16}
+            height={verticalHeight}
+            fill={`url(#${gradientId})`}
+            rx={6}
+          />
+          {verticalTicks.map((tick, index) => {
+            const y =
+              verticalHeight -
+              (index / (verticalTicks.length - 1)) * verticalHeight;
+            return (
+              <g key={`tick-${index}`}>
+                <line
+                  x1={16}
+                  x2={24}
+                  y1={y}
+                  y2={y}
+                  stroke="rgba(0,0,0,0.4)"
+                  strokeWidth={1}
+                />
+                <text
+                  x={30}
+                  y={y}
+                  fontSize={11}
+                  dominantBaseline="middle"
+                  fill="rgba(0,0,0,0.82)"
+                >
+                  {formatNumber(tick)}
+                </text>
+              </g>
+            );
+          })}
+        </svg>
+      ) : (
+        <>
+          <svg width={width} height={height} style={{ display: 'block' }}>
+            <defs>
+              <linearGradient id={gradientId} x1="0" y1="0" x2="1" y2="0">
+                {stops.map((t) => (
+                  <stop key={t} offset={`${t * 100}%`} stopColor={getColor(t)} />
+                ))}
+              </linearGradient>
+            </defs>
+            <rect
+              x={0}
+              y={0}
+              width={width}
+              height={height}
+              fill={`url(#${gradientId})`}
+              rx={6}
+            />
+          </svg>
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              marginTop: 6,
+              fontSize: 12,
+            }}
+          >
+            <span>min: {formatNumber(min)}</span>
+            {midLabel ? <span>{midLabel}</span> : <span />}
+            <span>max: {formatNumber(max)}</span>
+          </div>
+        </>
+      )}
       {mode !== 'analysis' && (
         <div style={{ marginTop: 6, fontSize: 12, opacity: 0.8 }}>
           最大値を基準に自動スケール（線形）
@@ -1230,6 +1301,7 @@ function Legend({ mode, min, max, midLabel }) {
 
 export default function App() {
   const [mode, setMode] = useState(DEFAULT_MODE);
+  const [legendLayout, setLegendLayout] = useState('horizontal');
 
   // ファイル
   const [shapeGeo, setShapeGeo] = useState(null);
@@ -2730,6 +2802,22 @@ export default function App() {
                     <option value="all">全市区町村の最大に合わせる</option>
                   </select>
                 </div>
+
+                <div style={{ marginTop: 10 }}>
+                  <div
+                    style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}
+                  >
+                    凡例の表示方法
+                  </div>
+                  <select
+                    value={legendLayout}
+                    onChange={(e) => setLegendLayout(e.target.value)}
+                    style={selectStyle}
+                  >
+                    <option value="horizontal">従来（横）</option>
+                    <option value="vertical">縦表示</option>
+                  </select>
+                </div>
               </Section>
 
               <Section title="表示する市区町村">
@@ -3257,6 +3345,7 @@ export default function App() {
             min={valueStats.min}
             max={valueStats.max}
             midLabel={mode === 'analysis' ? '1.0' : null}
+            layout={legendLayout}
           />
         )}
       </div>
