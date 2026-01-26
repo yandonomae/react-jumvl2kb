@@ -481,6 +481,7 @@ const RIDERSHIP_ICON_STEP = 5000;
 const RIDERSHIP_ICON_DEFAULT_SIZE = 22;
 const RIDERSHIP_ICON_GAP = 4;
 const RIDERSHIP_ICON_ROW_COUNT = 5;
+const TILE_SIZE = 256;
 
 const resolvePublicUrl = (path) => {
   const baseHref = new URL(import.meta.env.BASE_URL ?? '/', window.location.href);
@@ -866,6 +867,23 @@ function offsetLatLon({ lat, lon }, distanceMeters, angleRad) {
   const dLat = (distanceMeters * Math.cos(angleRad)) / metersPerDegLat;
   const dLon = (distanceMeters * Math.sin(angleRad)) / metersPerDegLon;
   return { lat: lat + dLat, lon: lon + dLon };
+}
+
+function lonLatToTile(lon, lat, zoom) {
+  const n = 2 ** zoom;
+  const x = ((lon + 180) / 360) * n;
+  const rad = (lat * Math.PI) / 180;
+  const y =
+    ((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2) * n;
+  return [x, y];
+}
+
+function tileToLonLat(x, y, zoom) {
+  const n = 2 ** zoom;
+  const lon = (x / n) * 360 - 180;
+  const latRad = Math.atan(Math.sinh(Math.PI * (1 - (2 * y) / n)));
+  const lat = (latRad * 180) / Math.PI;
+  return [lon, lat];
 }
 
 function orientation(ax, ay, bx, by, cx, cy) {
@@ -2686,6 +2704,60 @@ export default function App() {
     mode === 'restaurant' || mode === 'restaurant-analysis';
   const isBaseMapToggleMode = mode === 'restaurant' || mode === 'ridership';
   const showPlainBaseMapLayer = isBaseMapToggleMode && showBaseMapLayer;
+  const baseMapTiles = useMemo(() => {
+    if (!showPlainBaseMapLayer || !projection || !width || !height) return [];
+
+    const scale = projection.scale() * transform.k;
+    const zoomLevel = Math.round(
+      Math.log2((scale * 2 * Math.PI) / TILE_SIZE)
+    );
+    const z = Math.min(18, Math.max(10, zoomLevel));
+    const maxTileIndex = 2 ** z - 1;
+
+    const minX = (0 - transform.x) / transform.k;
+    const minY = (0 - transform.y) / transform.k;
+    const maxX = (width - transform.x) / transform.k;
+    const maxY = (height - transform.y) / transform.k;
+
+    const nw = projection.invert([minX, minY]);
+    const se = projection.invert([maxX, maxY]);
+    if (!nw || !se) return [];
+
+    const [x1, y1] = lonLatToTile(nw[0], nw[1], z);
+    const [x2, y2] = lonLatToTile(se[0], se[1], z);
+    const minTileX = Math.max(0, Math.floor(Math.min(x1, x2)));
+    const maxTileX = Math.min(maxTileIndex, Math.floor(Math.max(x1, x2)));
+    const minTileY = Math.max(0, Math.floor(Math.min(y1, y2)));
+    const maxTileY = Math.min(maxTileIndex, Math.floor(Math.max(y1, y2)));
+
+    const tiles = [];
+    for (let x = minTileX; x <= maxTileX; x += 1) {
+      for (let y = minTileY; y <= maxTileY; y += 1) {
+        const [lon1, lat1] = tileToLonLat(x, y, z);
+        const [lon2, lat2] = tileToLonLat(x + 1, y + 1, z);
+        const topLeft = projection([lon1, lat1]);
+        const bottomRight = projection([lon2, lat2]);
+        if (!topLeft || !bottomRight) continue;
+        tiles.push({
+          id: `${z}-${x}-${y}`,
+          x: topLeft[0],
+          y: topLeft[1],
+          width: bottomRight[0] - topLeft[0],
+          height: bottomRight[1] - topLeft[1],
+          url: `https://tile.openstreetmap.org/${z}/${x}/${y}.png`,
+        });
+      }
+    }
+    return tiles;
+  }, [
+    showPlainBaseMapLayer,
+    projection,
+    width,
+    height,
+    transform.k,
+    transform.x,
+    transform.y,
+  ]);
 
   const handleRestaurantGeocode = async () => {
     if (!restaurantRows?.length || restaurantGeoRunning) return;
@@ -2828,6 +2900,24 @@ export default function App() {
             <g
               transform={`translate(${transform.x},${transform.y}) scale(${transform.k})`}
             >
+              {showPlainBaseMapLayer && baseMapTiles.length ? (
+                <g>
+                  {baseMapTiles.map((tile) => (
+                    <image
+                      key={tile.id}
+                      href={tile.url}
+                      x={tile.x}
+                      y={tile.y}
+                      width={tile.width}
+                      height={tile.height}
+                      opacity={0.95}
+                      preserveAspectRatio="none"
+                      style={{ pointerEvents: 'none' }}
+                    />
+                  ))}
+                </g>
+              ) : null}
+
               {mode === 'restaurant-analysis' && restaurantGrid.length ? (
                 <g>
                   {restaurantGrid.map((cell) => (
@@ -2866,6 +2956,8 @@ export default function App() {
                     v !== null && v !== undefined && !Number.isNaN(v);
                   const fill =
                     mode === 'restaurant-analysis'
+                      ? 'transparent'
+                      : showPlainBaseMapLayer
                       ? 'transparent'
                       : isRestaurantLikeMode
                       ? '#f4f4f4'
