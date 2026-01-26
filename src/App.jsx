@@ -650,6 +650,18 @@ function getRatingRangeKey(value) {
   return `${min.toFixed(2)}-${max.toFixed(2)}`;
 }
 
+const CATEGORY_NONE_KEY = 'none';
+const CATEGORY_NONE_LABEL = 'カテゴリなし';
+
+function splitRestaurantCategories(raw) {
+  const normalized = normalizeKeyString(raw);
+  if (!normalized) return [];
+  return normalized
+    .split(/[、,／/・]/)
+    .map((c) => c.trim())
+    .filter(Boolean);
+}
+
 function haversineMeters(lat1, lon1, lat2, lon2) {
   const toRad = (deg) => (deg * Math.PI) / 180;
   const r = 6371000;
@@ -1445,6 +1457,7 @@ export default function App() {
 
   // 飲食店（評価フィルタ）
   const [ratingSel, setRatingSel] = useState(new Set());
+  const [categorySel, setCategorySel] = useState(new Set());
 
   // 駅インジケーター
   const [stationIndicators, setStationIndicators] = useState({});
@@ -1778,6 +1791,38 @@ export default function App() {
     ],
     [ratingRanges]
   );
+  const restaurantCategoryOptions = useMemo(() => {
+    if (!restaurantRows?.length) return [];
+    const counts = new Map();
+    let noneCount = 0;
+    for (const row of restaurantRows) {
+      const categories = splitRestaurantCategories(
+        row['店のカテゴリ(キーワード)']
+      );
+      if (!categories.length) {
+        noneCount += 1;
+        continue;
+      }
+      for (const category of categories) {
+        counts.set(category, (counts.get(category) ?? 0) + 1);
+      }
+    }
+    const sorted = Array.from(counts.entries())
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'ja'))
+      .map(([name, count]) => ({
+        key: name,
+        label: name,
+        count,
+      }));
+    if (noneCount > 0) {
+      sorted.push({
+        key: CATEGORY_NONE_KEY,
+        label: CATEGORY_NONE_LABEL,
+        count: noneCount,
+      });
+    }
+    return sorted;
+  }, [restaurantRows]);
 
   useEffect(() => {
     if (!analysisMetricOptions.length) return;
@@ -1790,6 +1835,13 @@ export default function App() {
     if (ratingSel.size) return;
     setRatingSel(new Set(ratingOptions.map((opt) => opt.key)));
   }, [ratingOptions, ratingSel.size]);
+  useEffect(() => {
+    if (!restaurantCategoryOptions.length) return;
+    if (categorySel.size) return;
+    setCategorySel(
+      new Set(restaurantCategoryOptions.map((opt) => opt.key))
+    );
+  }, [restaurantCategoryOptions, categorySel.size]);
 
   const businessNumericColumns = useMemo(() => {
     if (!bizRows?.length) return [];
@@ -2247,6 +2299,21 @@ export default function App() {
       const ratingValue = safeToNumber(row['評価']);
       const ratingKey = getRatingRangeKey(ratingValue);
       if (ratingSel.size && !ratingSel.has(ratingKey)) continue;
+      const categories = splitRestaurantCategories(
+        row['店のカテゴリ(キーワード)']
+      );
+      const categoryKeys = categories.length
+        ? categories
+        : [CATEGORY_NONE_KEY];
+      const categoryLabels = categories.length
+        ? categories
+        : [CATEGORY_NONE_LABEL];
+      if (
+        categorySel.size &&
+        !categoryKeys.some((key) => categorySel.has(key))
+      ) {
+        continue;
+      }
       const latValue = safeToNumber(row['緯度']);
       const lonValue = safeToNumber(row['経度']);
       let cityCode = '';
@@ -2295,6 +2362,7 @@ export default function App() {
         lon: coord.lon,
         cityCode,
         category: row['店のカテゴリ(キーワード)'],
+        categories: categoryLabels,
         description: row['紹介文'],
         rating: row['評価'],
         ratingValue,
@@ -2314,6 +2382,7 @@ export default function App() {
     cityCentroidMap,
     selectedCityCodes,
     ratingSel,
+    categorySel,
   ]);
 
   const restaurantGeoPoints = useMemo(() => {
@@ -2380,21 +2449,19 @@ export default function App() {
         const lunchBudget = parseBudgetValue(point.budgetLunch);
         if (lunchBudget !== null) lunchBudgets.push(lunchBudget);
 
-        const categoryRaw = normalizeKeyString(point.category);
-        if (categoryRaw) {
-          categoryRaw
-            .split(/[、,／/・]/)
-            .map((c) => c.trim())
-            .filter(Boolean)
-            .forEach((c) => {
-              categories.set(c, (categories.get(c) ?? 0) + 1);
-            });
+        const categoryList = Array.isArray(point.categories)
+          ? point.categories
+          : splitRestaurantCategories(point.category);
+        if (categoryList.length) {
+          categoryList.forEach((c) => {
+            categories.set(c, (categories.get(c) ?? 0) + 1);
+          });
         }
       }
 
       const topCategories = Array.from(categories.entries())
         .sort((a, b) => b[1] - a[1])
-        .slice(0, 3)
+        .slice(0, 5)
         .map(([name, countValue]) => ({ name, count: countValue }));
 
       const average = (vals) =>
@@ -2432,6 +2499,8 @@ export default function App() {
         頻出カテゴリ1位: topCategories[0]?.name ?? '',
         頻出カテゴリ2位: topCategories[1]?.name ?? '',
         頻出カテゴリ3位: topCategories[2]?.name ?? '',
+        頻出カテゴリ4位: topCategories[3]?.name ?? '',
+        頻出カテゴリ5位: topCategories[4]?.name ?? '',
         コメント合計: toCsvNumber(stats?.commentTotal ?? 0),
         ブックマーク合計: toCsvNumber(stats?.bookmarkTotal ?? 0),
         平均昼予算: toCsvNumber(stats?.avgLunchBudget ?? null),
@@ -2718,6 +2787,8 @@ export default function App() {
       '頻出カテゴリ1位',
       '頻出カテゴリ2位',
       '頻出カテゴリ3位',
+      '頻出カテゴリ4位',
+      '頻出カテゴリ5位',
       'コメント合計',
       'ブックマーク合計',
       '平均昼予算',
@@ -3145,7 +3216,7 @@ export default function App() {
                   </div>
                   <div style={{ padding: '8px 10px' }}>
                     <div>飲食店数: {formatNumber(stats?.count ?? 0)}</div>
-                    <div>頻出カテゴリ上位3: {topCategoryLabel}</div>
+                    <div>頻出カテゴリ上位5: {topCategoryLabel}</div>
                     <div>
                       コメント合計: {formatNumber(stats?.commentTotal ?? 0)}
                     </div>
@@ -3952,6 +4023,81 @@ export default function App() {
                             <span>{opt.label}</span>
                           </label>
                         ))}
+                      </div>
+                      <div
+                        style={{
+                          marginTop: 12,
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                        }}
+                      >
+                        <div style={{ fontSize: 12, fontWeight: 800 }}>
+                          カテゴリフィルタ
+                        </div>
+                        <div style={{ display: 'flex', gap: 8 }}>
+                          <button
+                            style={miniBtn}
+                            onClick={() =>
+                              setCategorySel(
+                                new Set(
+                                  restaurantCategoryOptions.map((opt) => opt.key)
+                                )
+                              )
+                            }
+                          >
+                            全選択
+                          </button>
+                          <button
+                            style={miniBtn}
+                            onClick={() => setCategorySel(new Set())}
+                          >
+                            全解除
+                          </button>
+                        </div>
+                      </div>
+                      <div
+                        style={{
+                          marginTop: 8,
+                          maxHeight: 180,
+                          overflow: 'auto',
+                          border: '1px solid rgba(0,0,0,0.1)',
+                          borderRadius: 10,
+                          padding: 10,
+                          background: 'rgba(255,255,255,0.7)',
+                        }}
+                      >
+                        {restaurantCategoryOptions.length ? (
+                          restaurantCategoryOptions.map((opt) => (
+                            <label
+                              key={opt.key}
+                              style={{
+                                display: 'flex',
+                                gap: 8,
+                                alignItems: 'center',
+                                margin: '4px 0',
+                              }}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={categorySel.has(opt.key)}
+                                onChange={(e) => {
+                                  setCategorySel((prev) => {
+                                    const next = new Set(prev);
+                                    if (e.target.checked) next.add(opt.key);
+                                    else next.delete(opt.key);
+                                    return next;
+                                  });
+                                }}
+                              />
+                              <span>{opt.label}</span>
+                            </label>
+                          ))
+                        ) : (
+                          <div style={{ fontSize: 12, opacity: 0.75 }}>
+                            カテゴリ候補を読み込み中です。
+                          </div>
+                        )}
                       </div>
                       <div style={{ marginTop: 12 }}>
                         <button
