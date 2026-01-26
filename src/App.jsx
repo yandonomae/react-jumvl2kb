@@ -478,7 +478,7 @@ const DEFAULT_MODE = 'population'; // population | household | business | analys
 
 const RESTAURANT_GRID_SIZE_METERS = 250;
 const RIDERSHIP_ICON_STEP = 5000;
-const RIDERSHIP_ICON_DEFAULT_SIZE = 18;
+const RIDERSHIP_ICON_DEFAULT_SIZE = 22;
 const RIDERSHIP_ICON_GAP = 4;
 const RIDERSHIP_ICON_ROW_COUNT = 5;
 
@@ -2946,7 +2946,8 @@ export default function App() {
                     border: '1px solid rgba(0,0,0,0.15)',
                     padding: '8px 10px',
                     boxShadow: '0 6px 16px rgba(0,0,0,0.12)',
-                    minWidth: 160,
+                    minWidth: 140,
+                    width: 'fit-content',
                     fontSize: 12,
                     lineHeight: 1.4,
                     pointerEvents: 'auto',
