@@ -1230,7 +1230,11 @@ function Legend({ mode, min, max, midLabel, layout }) {
   const width = 220;
   const height = 12;
   const verticalHeight = 190;
-  const verticalWidth = 180;
+  const verticalBarWidth = 16;
+  const verticalTickWidth = 8;
+  const verticalLabelGap = 6;
+  const verticalLabelX = verticalBarWidth + verticalTickWidth + verticalLabelGap;
+  const verticalWidth = verticalLabelX + 60;
   const verticalPadding = 8;
   const verticalUsableHeight = verticalHeight - verticalPadding * 2;
 
@@ -1312,7 +1316,7 @@ function Legend({ mode, min, max, midLabel, layout }) {
           <rect
             x={0}
             y={verticalPadding}
-            width={16}
+            width={verticalBarWidth}
             height={verticalUsableHeight}
             fill={`url(#${gradientId})`}
             rx={6}
@@ -1325,15 +1329,15 @@ function Legend({ mode, min, max, midLabel, layout }) {
             return (
               <g key={`tick-${index}`}>
                 <line
-                  x1={16}
-                  x2={24}
+                  x1={verticalBarWidth}
+                  x2={verticalBarWidth + verticalTickWidth}
                   y1={y}
                   y2={y}
                   stroke="rgba(0,0,0,0.4)"
                   strokeWidth={1}
                 />
                 <text
-                  x={30}
+                  x={verticalLabelX}
                   y={y}
                   fontSize={11}
                   dominantBaseline="middle"
@@ -1377,11 +1381,6 @@ function Legend({ mode, min, max, midLabel, layout }) {
             <span>max: {formatNumber(max)}</span>
           </div>
         </>
-      )}
-      {mode !== 'analysis' && (
-        <div style={{ marginTop: 6, fontSize: 12, opacity: 0.8 }}>
-          最大値を基準に自動スケール（線形）
-        </div>
       )}
       {mode === 'analysis' && (
         <div style={{ marginTop: 6, fontSize: 12, opacity: 0.8 }}>
