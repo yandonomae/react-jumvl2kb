@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import shp from 'shpjs';
 import Papa from 'papaparse';
-import { geoCentroid, geoMercator, geoPath } from 'd3-geo';
+import { geoBounds, geoCentroid, geoContains, geoMercator, geoPath } from 'd3-geo';
 import { extent } from 'd3-array';
 import { scaleSequential, scaleDiverging } from 'd3-scale';
 import {
@@ -411,7 +411,9 @@ const RAIL_CONNECTORS = [
   },
 ];
 
-const DEFAULT_MODE = 'population'; // population | household | business | analysis | restaurant
+const DEFAULT_MODE = 'population'; // population | household | business | analysis | restaurant | restaurant-analysis
+
+const RESTAURANT_GRID_SIZE_METERS = 125;
 
 const resolvePublicUrl = (path) => {
   const baseHref = new URL(import.meta.env.BASE_URL ?? '/', window.location.href);
@@ -715,6 +717,83 @@ function offsetLatLon({ lat, lon }, distanceMeters, angleRad) {
   const dLat = (distanceMeters * Math.cos(angleRad)) / metersPerDegLat;
   const dLon = (distanceMeters * Math.sin(angleRad)) / metersPerDegLon;
   return { lat: lat + dLat, lon: lon + dLon };
+}
+
+function orientation(ax, ay, bx, by, cx, cy) {
+  const val = (by - ay) * (cx - bx) - (bx - ax) * (cy - by);
+  if (Math.abs(val) < 1e-10) return 0;
+  return val > 0 ? 1 : 2;
+}
+
+function isPointOnSegment(ax, ay, bx, by, cx, cy) {
+  return (
+    cx <= Math.max(ax, bx) &&
+    cx >= Math.min(ax, bx) &&
+    cy <= Math.max(ay, by) &&
+    cy >= Math.min(ay, by)
+  );
+}
+
+function segmentsIntersect(ax, ay, bx, by, cx, cy, dx, dy) {
+  const o1 = orientation(ax, ay, bx, by, cx, cy);
+  const o2 = orientation(ax, ay, bx, by, dx, dy);
+  const o3 = orientation(cx, cy, dx, dy, ax, ay);
+  const o4 = orientation(cx, cy, dx, dy, bx, by);
+
+  if (o1 !== o2 && o3 !== o4) return true;
+  if (o1 === 0 && isPointOnSegment(ax, ay, bx, by, cx, cy)) return true;
+  if (o2 === 0 && isPointOnSegment(ax, ay, bx, by, dx, dy)) return true;
+  if (o3 === 0 && isPointOnSegment(cx, cy, dx, dy, ax, ay)) return true;
+  if (o4 === 0 && isPointOnSegment(cx, cy, dx, dy, bx, by)) return true;
+
+  return false;
+}
+
+function pointInRect(x, y, rect) {
+  return (
+    x >= rect.minX &&
+    x <= rect.maxX &&
+    y >= rect.minY &&
+    y <= rect.maxY
+  );
+}
+
+function lineIntersectsRect(segment, rect) {
+  if (
+    segment.maxX < rect.minX ||
+    segment.minX > rect.maxX ||
+    segment.maxY < rect.minY ||
+    segment.minY > rect.maxY
+  ) {
+    return false;
+  }
+
+  if (
+    pointInRect(segment.x1, segment.y1, rect) ||
+    pointInRect(segment.x2, segment.y2, rect)
+  ) {
+    return true;
+  }
+
+  const edges = [
+    [rect.minX, rect.minY, rect.maxX, rect.minY],
+    [rect.maxX, rect.minY, rect.maxX, rect.maxY],
+    [rect.maxX, rect.maxY, rect.minX, rect.maxY],
+    [rect.minX, rect.maxY, rect.minX, rect.minY],
+  ];
+
+  return edges.some(([ex1, ey1, ex2, ey2]) =>
+    segmentsIntersect(
+      segment.x1,
+      segment.y1,
+      segment.x2,
+      segment.y2,
+      ex1,
+      ey1,
+      ex2,
+      ey2
+    )
+  );
 }
 
 function sleep(ms) {
@@ -1074,6 +1153,7 @@ function Legend({ mode, min, max, midLabel }) {
     if (mode === 'population') return interpolateYlOrRd(t);
     if (mode === 'household') return interpolateGreens(t);
     if (mode === 'business') return interpolatePurples(t);
+    if (mode === 'restaurant-analysis') return interpolateYlOrRd(t);
     // analysis (high=red, low=blue) -> legend では青→白→赤に見えるよう調整
     return interpolateRdBu(1 - t);
   };
@@ -1100,6 +1180,8 @@ function Legend({ mode, min, max, midLabel }) {
           ? '世帯'
           : mode === 'business'
           ? '事業所'
+          : mode === 'restaurant-analysis'
+          ? '飲食店分析'
           : '分析（特化係数）'}
         ）
       </div>
@@ -1604,7 +1686,7 @@ export default function App() {
       map.set(key, val);
     };
 
-    if (mode === 'restaurant') return map;
+    if (mode === 'restaurant' || mode === 'restaurant-analysis') return map;
 
     const targetCityCodes = targetCodes?.length
       ? new Set(targetCodes)
@@ -1772,65 +1854,6 @@ export default function App() {
     analysisMetric,
   ]);
 
-  // --- Stats + color scale ---
-  const valueStats = useMemo(() => {
-    if (mode === 'restaurant') return { min: 0, max: 1, mid: null };
-    const scopeGeo =
-      scaleScope === 'all' ? shapeGeo : displayShapeGeo;
-    const scopeValues =
-      scaleScope === 'all' ? featureValueAll : featureValue;
-
-    if (!scopeGeo?.features?.length)
-      return { min: 0, max: 1, mid: null };
-
-    const vals = [];
-    for (const f of scopeGeo.features) {
-      const k = normalizeKeyString(f?.properties?.KEY_CODE);
-      const v = scopeValues.get(k);
-      if (v === null || v === undefined || Number.isNaN(v)) continue;
-      vals.push(Number(v));
-    }
-    if (!vals.length) return { min: 0, max: 1, mid: null };
-
-    const [mn, mx] = extent(vals);
-
-    if (mode === 'analysis') return { min: mn ?? 0, max: mx ?? 1, mid: 1.0 };
-    return { min: mn ?? 0, max: mx ?? 1, mid: null };
-  }, [
-    mode,
-    displayShapeGeo,
-    shapeGeo,
-    featureValue,
-    featureValueAll,
-    scaleScope,
-  ]);
-
-  const colorForValue = useMemo(() => {
-    if (mode === 'restaurant') {
-      return () => '#f4f4f4';
-    }
-    const { min, max } = valueStats;
-
-    if (mode === 'analysis') {
-      const mx = Math.max(1.0, max || 1.0);
-      const mn = Math.min(1.0, min || 1.0);
-      const s = scaleDiverging(interpolateRdBu).domain([mx, 1.0, mn]);
-      return (v) => s(v);
-    }
-
-    const seq =
-      mode === 'population'
-        ? scaleSequential(interpolateYlOrRd)
-        : mode === 'household'
-        ? scaleSequential(interpolateGreens)
-        : scaleSequential(interpolatePurples);
-
-    const mn = Number.isFinite(min) ? min : 0;
-    const mx = Number.isFinite(max) ? max : 1;
-    seq.domain([mn, mx || 1]);
-
-    return (v) => seq(v);
-  }, [mode, valueStats]);
 
   // --- Render helpers ---
   const onFeatureEnter = (e, f) => {
@@ -1869,14 +1892,18 @@ export default function App() {
   }, [railGeo, pathGen]);
 
   const cityBoundaryFeatures = useMemo(() => {
-    if (!boundaryGeo?.features?.length || !selectedCityCodes.length) return [];
-    const selectedSet = new Set(selectedCityCodes);
+    if (!boundaryGeo?.features?.length) return [];
+    const targetCodes = selectedCityCodes.length
+      ? selectedCityCodes
+      : activeCityCodes;
+    if (!targetCodes.length) return [];
+    const selectedSet = new Set(targetCodes);
     return boundaryGeo.features.filter((feature) => {
       const codes = getBoundaryCityCodes(feature);
       if (!codes.length) return false;
       return codes.some((code) => selectedSet.has(code));
     });
-  }, [boundaryGeo, selectedCityCodes]);
+  }, [boundaryGeo, selectedCityCodes, activeCityCodes]);
 
   const stationPoints = useMemo(() => {
     if (!projection) return [];
@@ -1961,6 +1988,237 @@ export default function App() {
     selectedCityCodes,
   ]);
 
+  const restaurantGeoPoints = useMemo(() => {
+    if (!restaurantRows?.length) return [];
+    const points = [];
+    for (const row of restaurantRows) {
+      const latValue = safeToNumber(row['緯度']);
+      const lonValue = safeToNumber(row['経度']);
+      if (latValue === null || lonValue === null) continue;
+      const address = normalizeKeyString(row['住所']);
+      let cityCode = '';
+      for (const [cityName, code] of Object.entries(CITY_NAME_TO_CODE)) {
+        if (address.includes(cityName)) {
+          cityCode = code;
+          break;
+        }
+      }
+      if (
+        selectedCityCodes.length &&
+        cityCode &&
+        !selectedCityCodes.includes(cityCode)
+      ) {
+        continue;
+      }
+      points.push({
+        id: row['店舗ID'] || row['店の名前'] || `${latValue}-${lonValue}`,
+        lat: latValue,
+        lon: lonValue,
+        cityCode,
+      });
+    }
+    return points;
+  }, [restaurantRows, selectedCityCodes]);
+
+  const railSegments = useMemo(() => {
+    if (!projection || !railGeo?.features?.length) return [];
+    const segments = [];
+    for (const feature of railGeo.features) {
+      const coords = feature?.geometry?.coordinates;
+      if (!Array.isArray(coords)) continue;
+      for (let i = 0; i < coords.length - 1; i += 1) {
+        const p1 = projection(coords[i]);
+        const p2 = projection(coords[i + 1]);
+        if (!p1 || !p2) continue;
+        const [x1, y1] = p1;
+        const [x2, y2] = p2;
+        segments.push({
+          x1,
+          y1,
+          x2,
+          y2,
+          minX: Math.min(x1, x2),
+          maxX: Math.max(x1, x2),
+          minY: Math.min(y1, y2),
+          maxY: Math.max(y1, y2),
+        });
+      }
+    }
+    return segments;
+  }, [railGeo, projection]);
+
+  const restaurantGrid = useMemo(() => {
+    if (mode !== 'restaurant-analysis') return [];
+    if (!projection) return [];
+    if (!restaurantGeoPoints.length) return [];
+    if (!cityBoundaryFeatures.length) return [];
+
+    const boundaryCollection = {
+      type: 'FeatureCollection',
+      features: cityBoundaryFeatures,
+    };
+    const bounds = geoBounds(boundaryCollection);
+    if (
+      !bounds ||
+      !Number.isFinite(bounds[0][0]) ||
+      !Number.isFinite(bounds[0][1]) ||
+      !Number.isFinite(bounds[1][0]) ||
+      !Number.isFinite(bounds[1][1])
+    ) {
+      return [];
+    }
+
+    const [[minLon, minLat], [maxLon, maxLat]] = bounds;
+    const center = geoCentroid(boundaryCollection);
+    const centerLat = center?.[1] ?? 0;
+    const metersPerDegLat = 111320;
+    const latStep = RESTAURANT_GRID_SIZE_METERS / metersPerDegLat;
+    const metersPerDegLon =
+      metersPerDegLat * Math.cos((centerLat * Math.PI) / 180);
+    const lonStep =
+      RESTAURANT_GRID_SIZE_METERS / (metersPerDegLon || metersPerDegLat);
+
+    const isInsideBoundary = (lon, lat) =>
+      cityBoundaryFeatures.some((feature) =>
+        geoContains(feature, [lon, lat])
+      );
+
+    const countMap = new Map();
+    for (const point of restaurantGeoPoints) {
+      if (!isInsideBoundary(point.lon, point.lat)) continue;
+      const xIndex = Math.floor((point.lon - minLon) / lonStep);
+      const yIndex = Math.floor((point.lat - minLat) / latStep);
+      if (xIndex < 0 || yIndex < 0) continue;
+      const key = `${xIndex}_${yIndex}`;
+      countMap.set(key, (countMap.get(key) ?? 0) + 1);
+    }
+
+    const grid = [];
+    const maxX = Math.ceil((maxLon - minLon) / lonStep);
+    const maxY = Math.ceil((maxLat - minLat) / latStep);
+
+    for (let y = 0; y <= maxY; y += 1) {
+      const lat = minLat + y * latStep;
+      for (let x = 0; x <= maxX; x += 1) {
+        const lon = minLon + x * lonStep;
+        const centerLon = lon + lonStep / 2;
+        const centerLatCell = lat + latStep / 2;
+        if (!isInsideBoundary(centerLon, centerLatCell)) continue;
+
+        const p0 = projection([lon, lat]);
+        const p1 = projection([lon + lonStep, lat + latStep]);
+        if (!p0 || !p1) continue;
+
+        const rect = {
+          minX: Math.min(p0[0], p1[0]),
+          maxX: Math.max(p0[0], p1[0]),
+          minY: Math.min(p0[1], p1[1]),
+          maxY: Math.max(p0[1], p1[1]),
+        };
+
+        if (railSegments.length) {
+          const hasLine = railSegments.some((segment) =>
+            lineIntersectsRect(segment, rect)
+          );
+          if (!hasLine) continue;
+        }
+
+        const key = `${x}_${y}`;
+        const count = countMap.get(key) ?? 0;
+        grid.push({
+          id: `grid-${x}-${y}`,
+          x: rect.minX,
+          y: rect.minY,
+          width: rect.maxX - rect.minX,
+          height: rect.maxY - rect.minY,
+          count,
+        });
+      }
+    }
+    return grid;
+  }, [
+    mode,
+    projection,
+    restaurantGeoPoints,
+    cityBoundaryFeatures,
+    railSegments,
+  ]);
+
+  // --- Stats + color scale ---
+  const valueStats = useMemo(() => {
+    if (mode === 'restaurant') return { min: 0, max: 1, mid: null };
+    if (mode === 'restaurant-analysis') {
+      if (!restaurantGrid.length) return { min: 0, max: 1, mid: null };
+      const counts = restaurantGrid.map((cell) => cell.count);
+      const [mn, mx] = extent(counts);
+      return { min: mn ?? 0, max: mx ?? 1, mid: null };
+    }
+    const scopeGeo =
+      scaleScope === 'all' ? shapeGeo : displayShapeGeo;
+    const scopeValues =
+      scaleScope === 'all' ? featureValueAll : featureValue;
+
+    if (!scopeGeo?.features?.length)
+      return { min: 0, max: 1, mid: null };
+
+    const vals = [];
+    for (const f of scopeGeo.features) {
+      const k = normalizeKeyString(f?.properties?.KEY_CODE);
+      const v = scopeValues.get(k);
+      if (v === null || v === undefined || Number.isNaN(v)) continue;
+      vals.push(Number(v));
+    }
+    if (!vals.length) return { min: 0, max: 1, mid: null };
+
+    const [mn, mx] = extent(vals);
+
+    if (mode === 'analysis') return { min: mn ?? 0, max: mx ?? 1, mid: 1.0 };
+    return { min: mn ?? 0, max: mx ?? 1, mid: null };
+  }, [
+    mode,
+    displayShapeGeo,
+    shapeGeo,
+    featureValue,
+    featureValueAll,
+    scaleScope,
+    restaurantGrid,
+  ]);
+
+  const colorForValue = useMemo(() => {
+    if (mode === 'restaurant') {
+      return () => '#f4f4f4';
+    }
+    if (mode === 'restaurant-analysis') {
+      const { min, max } = valueStats;
+      const seq = scaleSequential(interpolateYlOrRd);
+      const mn = Number.isFinite(min) ? min : 0;
+      const mx = Number.isFinite(max) ? max : 1;
+      seq.domain([mn, mx || 1]);
+      return (v) => seq(v);
+    }
+    const { min, max } = valueStats;
+
+    if (mode === 'analysis') {
+      const mx = Math.max(1.0, max || 1.0);
+      const mn = Math.min(1.0, min || 1.0);
+      const s = scaleDiverging(interpolateRdBu).domain([mx, 1.0, mn]);
+      return (v) => s(v);
+    }
+
+    const seq =
+      mode === 'population'
+        ? scaleSequential(interpolateYlOrRd)
+        : mode === 'household'
+        ? scaleSequential(interpolateGreens)
+        : scaleSequential(interpolatePurples);
+
+    const mn = Number.isFinite(min) ? min : 0;
+    const mx = Number.isFinite(max) ? max : 1;
+    seq.domain([mn, mx || 1]);
+
+    return (v) => seq(v);
+  }, [mode, valueStats]);
+
   const cityLabel = useMemo(() => {
     if (!selectedCityNames.length) return '';
     return `（${selectedCityNames.join('・')}）`;
@@ -1968,6 +2226,8 @@ export default function App() {
 
   const winW = typeof window !== 'undefined' ? window.innerWidth : 1200;
   const winH = typeof window !== 'undefined' ? window.innerHeight : 800;
+  const isRestaurantLikeMode =
+    mode === 'restaurant' || mode === 'restaurant-analysis';
 
   const handleRestaurantGeocode = async () => {
     if (!restaurantRows?.length || restaurantGeoRunning) return;
@@ -2096,7 +2356,7 @@ export default function App() {
                 const v = featureValue.get(k);
                 const hasV = v !== null && v !== undefined && !Number.isNaN(v);
                 const fill =
-                  mode === 'restaurant'
+                  isRestaurantLikeMode
                     ? '#f4f4f4'
                     : hasV
                     ? colorForValue(Number(v))
@@ -2114,13 +2374,50 @@ export default function App() {
                     }
                     strokeWidth={0.6 / transform.k}
                     onMouseEnter={
-                      mode === 'restaurant' ? undefined : (e) => onFeatureEnter(e, f)
+                      isRestaurantLikeMode
+                        ? undefined
+                        : (e) => onFeatureEnter(e, f)
                     }
-                    onMouseMove={mode === 'restaurant' ? undefined : onFeatureMove}
-                    onMouseLeave={mode === 'restaurant' ? undefined : onFeatureLeave}
+                    onMouseMove={
+                      isRestaurantLikeMode ? undefined : onFeatureMove
+                    }
+                    onMouseLeave={
+                      isRestaurantLikeMode ? undefined : onFeatureLeave
+                    }
                   />
                 );
               })}
+
+              {mode === 'restaurant-analysis' && restaurantGrid.length ? (
+                <g>
+                  {restaurantGrid.map((cell) => (
+                    <rect
+                      key={cell.id}
+                      x={cell.x}
+                      y={cell.y}
+                      width={cell.width}
+                      height={cell.height}
+                      fill={colorForValue(cell.count)}
+                      fillOpacity={0.85}
+                      stroke="rgba(0,0,0,0.18)"
+                      strokeWidth={0.6 / transform.k}
+                      onMouseEnter={(e) => {
+                        setHover({
+                          visible: true,
+                          x: e.clientX,
+                          y: e.clientY,
+                          title: '飲食店分析（125m格子）',
+                          lines: [
+                            `飲食店数: ${formatNumber(cell.count)}`,
+                          ],
+                        });
+                      }}
+                      onMouseMove={onFeatureMove}
+                      onMouseLeave={onFeatureLeave}
+                    />
+                  ))}
+                </g>
+              ) : null}
 
               {boldCityBoundary && cityBoundaryFeatures.length
                 ? cityBoundaryFeatures.map((feature, idx) => (
@@ -2323,7 +2620,7 @@ export default function App() {
               <div
                 style={{
                   display: 'grid',
-                  gridTemplateColumns: 'repeat(5, 1fr)',
+                  gridTemplateColumns: 'repeat(6, 1fr)',
                   gap: 6,
                   marginBottom: 12,
                 }}
@@ -2353,6 +2650,11 @@ export default function App() {
                   active={mode === 'restaurant'}
                   onClick={() => setMode('restaurant')}
                 />
+                <ModeBtn
+                  label="飲食店分析"
+                  active={mode === 'restaurant-analysis'}
+                  onClick={() => setMode('restaurant-analysis')}
+                />
               </div>
 
               {/* Built-in data */}
@@ -2373,7 +2675,9 @@ export default function App() {
                   </li>
                   <li>人口: h03_27(茨木_人口).csv</li>
                   <li>世帯: h06_01_27(茨木_世帯).csv</li>
-                  <li>飲食店: 飲食店_吹田.csv / 飲食店_豊中.csv</li>
+                  <li>
+                    飲食店: 飲食店_吹田_緯度経度付き.csv / 飲食店_豊中_緯度経度付き.csv
+                  </li>
                 </ul>
                 {selectedCityCodes.length ? (
                   <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>
@@ -2871,6 +3175,28 @@ export default function App() {
                           {restaurantGeoStatus}
                         </div>
                       ) : null}
+                    </>
+                  )}
+                </Section>
+              )}
+
+              {mode === 'restaurant-analysis' && (
+                <Section title="飲食店分析（125m格子ヒートマップ）">
+                  {!restaurantGeoPoints.length ? (
+                    <div style={{ fontSize: 12, opacity: 0.75 }}>
+                      緯度・経度付きの飲食店データが読み込まれていません。
+                    </div>
+                  ) : (
+                    <>
+                      <div style={{ fontSize: 12, opacity: 0.85 }}>
+                        125m × 125m の格子内に含まれる飲食店数で塗り分けます。
+                      </div>
+                      <div style={{ marginTop: 8, fontSize: 12, opacity: 0.85 }}>
+                        市境内かつ路線が載っている格子のみ描画対象です。
+                      </div>
+                      <div style={{ marginTop: 10, fontSize: 12 }}>
+                        対象件数: {restaurantGeoPoints.length}件
+                      </div>
                     </>
                   )}
                 </Section>
