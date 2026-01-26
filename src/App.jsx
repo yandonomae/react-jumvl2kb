@@ -2459,18 +2459,6 @@ export default function App() {
                         stroke={s.color}
                         strokeWidth={2 / transform.k}
                       />
-                      <text
-                        x={s.x}
-                        y={s.y - (stationRadius + 4) / transform.k}
-                        fontSize={12 / transform.k}
-                        textAnchor="middle"
-                        fill="#111"
-                        stroke="#fff"
-                        strokeWidth={3 / transform.k}
-                        paintOrder="stroke"
-                      >
-                        {s.name}
-                      </text>
                     </g>
                   ))}
                 </>
@@ -2512,6 +2500,25 @@ export default function App() {
                   ))}
                 </g>
               ) : null}
+
+              {/* Station labels (topmost) */}
+              {showRail
+                ? stationPoints.map((s) => (
+                    <text
+                      key={`station-label-${s.id}`}
+                      x={s.x}
+                      y={s.y - (stationRadius + 4) / transform.k}
+                      fontSize={12 / transform.k}
+                      textAnchor="middle"
+                      fill="#111"
+                      stroke="#fff"
+                      strokeWidth={3 / transform.k}
+                      paintOrder="stroke"
+                    >
+                      {s.name}
+                    </text>
+                  ))
+                : null}
             </g>
           )}
         </svg>
