@@ -466,11 +466,6 @@ const CITY_NAME_TO_CODE = Object.fromEntries(
 
 const CITY_BOUNDARY_GEOJSON_PATH = 'data/市境.geojson';
 
-const RESTAURANT_CITY_COLORS = {
-  '27205': '#ff7f50',
-  '27203': '#6a5acd',
-};
-
 // h06（世帯）階層（キー=列名）
 const HOUSEHOLD_HIERARCHY = {
   key: '総数',
@@ -512,6 +507,11 @@ const ANALYSIS_METRIC_OPTIONS = [
   '世帯の家族類型「不詳」',
 ];
 
+const STATION_CATCHMENT_METERS = 500;
+const RATING_STEP = 0.25;
+const RATING_MIN = 0;
+const RATING_MAX = 5;
+
 function clamp(n, a, b) {
   return Math.max(a, Math.min(b, n));
 }
@@ -530,6 +530,62 @@ function safeToNumber(v) {
   const cleaned = s.replace(/,/g, '');
   const num = Number(cleaned);
   return Number.isFinite(num) ? num : null;
+}
+
+function parseBudgetValue(raw) {
+  if (!raw) return null;
+  const text = String(raw).trim();
+  if (!text || text === '-' || text === '–' || text === '―') return null;
+  const cleaned = text.replace(/,/g, '');
+  const matches = cleaned.match(/\d+/g) || [];
+  const nums = matches.map((n) => Number(n)).filter(Number.isFinite);
+  if (!nums.length) return null;
+  if (nums.length >= 2) {
+    return (nums[0] + nums[1]) / 2;
+  }
+  const value = nums[0];
+  const upperOnly = /^[^0-9]*[〜～~]/.test(cleaned);
+  if (upperOnly) {
+    if (value <= 999) return 500;
+    return value / 2;
+  }
+  return value;
+}
+
+function buildRatingRanges() {
+  const ranges = [];
+  for (let min = RATING_MIN; min < RATING_MAX; min += RATING_STEP) {
+    const max = Math.min(min + RATING_STEP, RATING_MAX);
+    ranges.push({
+      key: `${min.toFixed(2)}-${max.toFixed(2)}`,
+      label: `${min.toFixed(2)}〜${max.toFixed(2)}`,
+      min,
+      max,
+    });
+  }
+  return ranges;
+}
+
+function getRatingRangeKey(value) {
+  if (!Number.isFinite(value)) return 'none';
+  const clamped = clamp(value, RATING_MIN, RATING_MAX);
+  let min = Math.floor(clamped / RATING_STEP) * RATING_STEP;
+  if (min > RATING_MAX - RATING_STEP) min = RATING_MAX - RATING_STEP;
+  const max = min + RATING_STEP;
+  return `${min.toFixed(2)}-${max.toFixed(2)}`;
+}
+
+function haversineMeters(lat1, lon1, lat2, lon2) {
+  const toRad = (deg) => (deg * Math.PI) / 180;
+  const r = 6371000;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) *
+      Math.cos(toRad(lat2)) *
+      Math.sin(dLon / 2) ** 2;
+  return 2 * r * Math.asin(Math.sqrt(a));
 }
 
 function normalizeKeyString(v) {
@@ -1295,6 +1351,7 @@ export default function App() {
   const [railWidth, setRailWidth] = useState(2.4); // ★追加：線幅
   const [stationRadius, setStationRadius] = useState(5);
   const [restaurantRadius, setRestaurantRadius] = useState(4);
+  const [showStationCatchment, setShowStationCatchment] = useState(false);
   const [boldCityBoundary, setBoldCityBoundary] = useState(false);
   const [scaleScope, setScaleScope] = useState('visible'); // visible | all
 
@@ -1311,6 +1368,13 @@ export default function App() {
 
   // 分析（特化係数）
   const [analysisMetric, setAnalysisMetric] = useState('単独世帯');
+
+  // 飲食店（評価フィルタ）
+  const [ratingSel, setRatingSel] = useState(new Set());
+
+  // 駅インジケーター
+  const [stationIndicators, setStationIndicators] = useState({});
+  const [draggingIndicator, setDraggingIndicator] = useState(null);
 
   // Tooltip
   const [hover, setHover] = useState({
@@ -1621,11 +1685,26 @@ export default function App() {
     return filtered.length ? filtered : base;
   }, [householdAvailableColumns]);
 
+  const ratingRanges = useMemo(() => buildRatingRanges(), []);
+  const ratingOptions = useMemo(
+    () => [
+      ...ratingRanges,
+      { key: 'none', label: '評価なし', min: null, max: null },
+    ],
+    [ratingRanges]
+  );
+
   useEffect(() => {
     if (!analysisMetricOptions.length) return;
     if (analysisMetricOptions.includes(analysisMetric)) return;
     setAnalysisMetric(analysisMetricOptions[0]);
   }, [analysisMetricOptions, analysisMetric]);
+
+  useEffect(() => {
+    if (!ratingOptions.length) return;
+    if (ratingSel.size) return;
+    setRatingSel(new Set(ratingOptions.map((opt) => opt.key)));
+  }, [ratingOptions, ratingSel.size]);
 
   const businessNumericColumns = useMemo(() => {
     if (!bizRows?.length) return [];
@@ -1695,6 +1774,33 @@ export default function App() {
 
     setTransform(zoomIdentity);
   }, [displayShapeGeo, width, height]);
+
+  useEffect(() => {
+    if (!draggingIndicator) return undefined;
+    const handleMove = (e) => {
+      setStationIndicators((prev) => {
+        const current = prev[draggingIndicator.id];
+        if (!current) return prev;
+        const dx = e.clientX - draggingIndicator.startX;
+        const dy = e.clientY - draggingIndicator.startY;
+        return {
+          ...prev,
+          [draggingIndicator.id]: {
+            ...current,
+            offsetX: draggingIndicator.originX + dx,
+            offsetY: draggingIndicator.originY + dy,
+          },
+        };
+      });
+    };
+    const handleUp = () => setDraggingIndicator(null);
+    window.addEventListener('mousemove', handleMove);
+    window.addEventListener('mouseup', handleUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMove);
+      window.removeEventListener('mouseup', handleUp);
+    };
+  }, [draggingIndicator]);
 
   const zoomIn = () => {
     if (!svgRef.current || !zoomRef.current) return;
@@ -1950,6 +2056,46 @@ export default function App() {
       .filter(Boolean);
   }, [stations, projection]);
 
+  const stationCatchmentCircles = useMemo(() => {
+    if (!projection) return [];
+    return stations
+      .map((s) => {
+        const center = projection([s.lon, s.lat]);
+        if (!center) return null;
+        const offset = offsetLatLon(
+          { lat: s.lat, lon: s.lon },
+          STATION_CATCHMENT_METERS,
+          Math.PI / 2
+        );
+        const edge = projection([offset.lon, offset.lat]);
+        if (!edge) return null;
+        const radius = Math.hypot(edge[0] - center[0], edge[1] - center[1]);
+        return { id: s.id, name: s.name, x: center[0], y: center[1], radius };
+      })
+      .filter(Boolean);
+  }, [stations, projection]);
+
+  const stationScreenPoints = useMemo(
+    () =>
+      stationPoints.map((s) => ({
+        ...s,
+        screenX: s.x * transform.k + transform.x,
+        screenY: s.y * transform.k + transform.y,
+      })),
+    [stationPoints, transform]
+  );
+
+  const stationScreenLookup = useMemo(
+    () =>
+      new Map(
+        stationScreenPoints.map((s) => [
+          s.id,
+          { x: s.screenX, y: s.screenY, name: s.name },
+        ])
+      ),
+    [stationScreenPoints]
+  );
+
   const restaurantPoints = useMemo(() => {
     if (!restaurantRows?.length || !projection) return [];
     const points = [];
@@ -1957,6 +2103,9 @@ export default function App() {
       const name = normalizeKeyString(row['店の名前']);
       if (!name) continue;
       const address = normalizeKeyString(row['住所']);
+      const ratingValue = safeToNumber(row['評価']);
+      const ratingKey = getRatingRangeKey(ratingValue);
+      if (ratingSel.size && !ratingSel.has(ratingKey)) continue;
       const latValue = safeToNumber(row['緯度']);
       const lonValue = safeToNumber(row['経度']);
       let cityCode = '';
@@ -2001,10 +2150,13 @@ export default function App() {
         name,
         x: projected[0],
         y: projected[1],
+        lat: coord.lat,
+        lon: coord.lon,
         cityCode,
         category: row['店のカテゴリ(キーワード)'],
         description: row['紹介文'],
         rating: row['評価'],
+        ratingValue,
         comments: row['コメント数'],
         bookmarks: row['ブックマーク数'],
         budgetNight: row['夜の予算'],
@@ -2020,6 +2172,7 @@ export default function App() {
     stationLookup,
     cityCentroidMap,
     selectedCityCodes,
+    ratingSel,
   ]);
 
   const restaurantGeoPoints = useMemo(() => {
@@ -2053,6 +2206,72 @@ export default function App() {
     }
     return points;
   }, [restaurantRows, selectedCityCodes]);
+
+  const stationStats = useMemo(() => {
+    const statsMap = new Map();
+    if (!stations.length || !restaurantPoints.length) return statsMap;
+    for (const station of stations) {
+      let count = 0;
+      let commentTotal = 0;
+      let bookmarkTotal = 0;
+      const categories = new Map();
+      const nightBudgets = [];
+      const lunchBudgets = [];
+
+      for (const point of restaurantPoints) {
+        if (!Number.isFinite(point.lat) || !Number.isFinite(point.lon)) continue;
+        const distance = haversineMeters(
+          station.lat,
+          station.lon,
+          point.lat,
+          point.lon
+        );
+        if (distance > STATION_CATCHMENT_METERS) continue;
+        count += 1;
+
+        const comments = safeToNumber(point.comments);
+        if (comments !== null) commentTotal += comments;
+        const bookmarks = safeToNumber(point.bookmarks);
+        if (bookmarks !== null) bookmarkTotal += bookmarks;
+
+        const nightBudget = parseBudgetValue(point.budgetNight);
+        if (nightBudget !== null) nightBudgets.push(nightBudget);
+        const lunchBudget = parseBudgetValue(point.budgetLunch);
+        if (lunchBudget !== null) lunchBudgets.push(lunchBudget);
+
+        const categoryRaw = normalizeKeyString(point.category);
+        if (categoryRaw) {
+          categoryRaw
+            .split(/[、,／/・]/)
+            .map((c) => c.trim())
+            .filter(Boolean)
+            .forEach((c) => {
+              categories.set(c, (categories.get(c) ?? 0) + 1);
+            });
+        }
+      }
+
+      const topCategories = Array.from(categories.entries())
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3)
+        .map(([name, countValue]) => ({ name, count: countValue }));
+
+      const average = (vals) =>
+        vals.length
+          ? vals.reduce((sum, v) => sum + v, 0) / vals.length
+          : null;
+
+      statsMap.set(station.id, {
+        count,
+        topCategories,
+        commentTotal,
+        bookmarkTotal,
+        avgNightBudget: average(nightBudgets),
+        avgLunchBudget: average(lunchBudgets),
+      });
+    }
+    return statsMap;
+  }, [stations, restaurantPoints]);
 
   const restaurantGrid = useMemo(() => {
     if (mode !== 'restaurant-analysis') return [];
@@ -2431,6 +2650,74 @@ export default function App() {
                   ))
                 : null}
 
+              {mode === 'restaurant' && restaurantPoints.length ? (
+                <g>
+                  {restaurantPoints.map((p) => (
+                    <circle
+                      key={p.id}
+                      cx={p.x}
+                      cy={p.y}
+                      r={restaurantRadius / transform.k}
+                      fill="#e53935"
+                      fillOpacity={0.7}
+                      stroke="rgba(0,0,0,0.35)"
+                      strokeWidth={0.6 / transform.k}
+                      onMouseEnter={(e) => {
+                        setHover({
+                          visible: true,
+                          x: e.clientX,
+                          y: e.clientY,
+                          title: p.name,
+                          lines: [
+                            p.category ? `カテゴリ: ${p.category}` : null,
+                            p.rating ? `評価: ${p.rating}` : null,
+                            p.comments ? `コメント数: ${p.comments}` : null,
+                            p.bookmarks ? `ブックマーク: ${p.bookmarks}` : null,
+                            p.budgetNight ? `夜予算: ${p.budgetNight}` : null,
+                            p.budgetLunch ? `昼予算: ${p.budgetLunch}` : null,
+                            p.address ? `住所: ${p.address}` : null,
+                            p.hint ? `位置推定: ${p.hint}` : null,
+                          ].filter(Boolean),
+                        });
+                      }}
+                      onMouseMove={onFeatureMove}
+                      onMouseLeave={onFeatureLeave}
+                    />
+                  ))}
+                </g>
+              ) : null}
+
+              {showStationCatchment && stationCatchmentCircles.length ? (
+                <g>
+                  {stationCatchmentCircles.map((circle) => (
+                    <circle
+                      key={`catchment-${circle.id}`}
+                      cx={circle.x}
+                      cy={circle.y}
+                      r={circle.radius}
+                      fill="rgba(255,82,82,0.12)"
+                      stroke="rgba(255,82,82,0.65)"
+                      strokeWidth={1 / transform.k}
+                      cursor="pointer"
+                      onClick={() => {
+                        setStationIndicators((prev) => {
+                          const current = prev[circle.id];
+                          const nextVisible = !current?.visible;
+                          const base = current || { offsetX: 18, offsetY: -18 };
+                          return {
+                            ...prev,
+                            [circle.id]: {
+                              ...base,
+                              visible: nextVisible,
+                            },
+                          };
+                        });
+                      }}
+                    />
+                  ))}
+                </g>
+              ) : null}
+
               {/* Rail overlay */}
               {showRail && (
                 <>
@@ -2463,43 +2750,6 @@ export default function App() {
                 </>
               )}
 
-              {mode === 'restaurant' && restaurantPoints.length ? (
-                <g>
-                  {restaurantPoints.map((p) => (
-                    <circle
-                      key={p.id}
-                      cx={p.x}
-                      cy={p.y}
-                      r={restaurantRadius / transform.k}
-                      fill={RESTAURANT_CITY_COLORS[p.cityCode] || '#f55'}
-                      fillOpacity={0.7}
-                      stroke="rgba(0,0,0,0.35)"
-                      strokeWidth={0.6 / transform.k}
-                      onMouseEnter={(e) => {
-                        setHover({
-                          visible: true,
-                          x: e.clientX,
-                          y: e.clientY,
-                          title: p.name,
-                          lines: [
-                            p.category ? `カテゴリ: ${p.category}` : null,
-                            p.rating ? `評価: ${p.rating}` : null,
-                            p.comments ? `コメント数: ${p.comments}` : null,
-                            p.bookmarks ? `ブックマーク: ${p.bookmarks}` : null,
-                            p.budgetNight ? `夜予算: ${p.budgetNight}` : null,
-                            p.budgetLunch ? `昼予算: ${p.budgetLunch}` : null,
-                            p.address ? `住所: ${p.address}` : null,
-                            p.hint ? `位置推定: ${p.hint}` : null,
-                          ].filter(Boolean),
-                        });
-                      }}
-                      onMouseMove={onFeatureMove}
-                      onMouseLeave={onFeatureLeave}
-                    />
-                  ))}
-                </g>
-              ) : null}
-
               {/* Station labels (topmost) */}
               {showRail
                 ? stationPoints.map((s) => (
@@ -2521,6 +2771,115 @@ export default function App() {
             </g>
           )}
         </svg>
+
+        {showStationCatchment && Object.keys(stationIndicators).length ? (
+          <div
+            style={{
+              position: 'absolute',
+              left: 0,
+              top: 0,
+              width: '100%',
+              height: '100%',
+              pointerEvents: 'none',
+            }}
+          >
+            {Object.entries(stationIndicators).map(([id, info]) => {
+              if (!info?.visible) return null;
+              const stationPos = stationScreenLookup.get(id);
+              if (!stationPos) return null;
+              const stats = stationStats.get(id);
+              const topCategoryLabel = stats?.topCategories?.length
+                ? stats.topCategories
+                    .map((c) => `${c.name} (${c.count})`)
+                    .join(' / ')
+                : '—';
+              return (
+                <div
+                  key={`indicator-${id}`}
+                  style={{
+                    position: 'absolute',
+                    left: stationPos.x + info.offsetX,
+                    top: stationPos.y + info.offsetY,
+                    width: 260,
+                    background: 'rgba(255,255,255,0.95)',
+                    borderRadius: 12,
+                    border: '1px solid rgba(0,0,0,0.12)',
+                    boxShadow: '0 8px 20px rgba(0,0,0,0.15)',
+                    fontSize: 12,
+                    pointerEvents: 'auto',
+                  }}
+                >
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      padding: '8px 10px',
+                      borderBottom: '1px solid rgba(0,0,0,0.08)',
+                      cursor: 'move',
+                      fontWeight: 800,
+                    }}
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setDraggingIndicator({
+                        id,
+                        startX: e.clientX,
+                        startY: e.clientY,
+                        originX: info.offsetX,
+                        originY: info.offsetY,
+                      });
+                    }}
+                  >
+                    <span>{stationPos.name}</span>
+                    <button
+                      type="button"
+                      style={{
+                        border: 'none',
+                        background: 'transparent',
+                        cursor: 'pointer',
+                        fontWeight: 700,
+                      }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setStationIndicators((prev) => ({
+                          ...prev,
+                          [id]: { ...prev[id], visible: false },
+                        }));
+                      }}
+                    >
+                      ×
+                    </button>
+                  </div>
+                  <div style={{ padding: '8px 10px' }}>
+                    <div>飲食店数: {formatNumber(stats?.count ?? 0)}</div>
+                    <div>頻出カテゴリ上位3: {topCategoryLabel}</div>
+                    <div>
+                      コメント合計: {formatNumber(stats?.commentTotal ?? 0)}
+                    </div>
+                    <div>
+                      ブックマーク合計: {formatNumber(stats?.bookmarkTotal ?? 0)}
+                    </div>
+                    <div>
+                      平均昼予算:{' '}
+                      {stats?.avgLunchBudget !== null &&
+                      stats?.avgLunchBudget !== undefined
+                        ? `￥${formatNumber(stats.avgLunchBudget)}`
+                        : '—'}
+                    </div>
+                    <div>
+                      平均夜予算:{' '}
+                      {stats?.avgNightBudget !== null &&
+                      stats?.avgNightBudget !== undefined
+                        ? `￥${formatNumber(stats.avgNightBudget)}`
+                        : '—'}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : null}
 
         {/* Tooltip */}
         {hover.visible && (
@@ -2799,6 +3158,22 @@ export default function App() {
                     onChange={(e) => setShowRail(e.target.checked)}
                   />
                   <span>路線・駅を表示</span>
+                </label>
+
+                <label
+                  style={{
+                    display: 'flex',
+                    gap: 10,
+                    alignItems: 'center',
+                    marginTop: 8,
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={showStationCatchment}
+                    onChange={(e) => setShowStationCatchment(e.target.checked)}
+                  />
+                  <span>駅500m圏を表示</span>
                 </label>
 
                 {/* ★追加：線の太さ */}
@@ -3171,7 +3546,74 @@ export default function App() {
                         </div>
                       </div>
                       <div style={{ marginTop: 10, fontSize: 12 }}>
-                        プロット件数: {restaurantRows.length}件
+                        プロット件数: {restaurantPoints.length}件
+                      </div>
+                      <div
+                        style={{
+                          marginTop: 12,
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                        }}
+                      >
+                        <div style={{ fontSize: 12, fontWeight: 800 }}>
+                          評価フィルタ（0.25刻み）
+                        </div>
+                        <div style={{ display: 'flex', gap: 8 }}>
+                          <button
+                            style={miniBtn}
+                            onClick={() =>
+                              setRatingSel(
+                                new Set(ratingOptions.map((opt) => opt.key))
+                              )
+                            }
+                          >
+                            全選択
+                          </button>
+                          <button
+                            style={miniBtn}
+                            onClick={() => setRatingSel(new Set())}
+                          >
+                            全解除
+                          </button>
+                        </div>
+                      </div>
+                      <div
+                        style={{
+                          marginTop: 8,
+                          maxHeight: 180,
+                          overflow: 'auto',
+                          border: '1px solid rgba(0,0,0,0.1)',
+                          borderRadius: 10,
+                          padding: 10,
+                          background: 'rgba(255,255,255,0.7)',
+                        }}
+                      >
+                        {ratingOptions.map((opt) => (
+                          <label
+                            key={opt.key}
+                            style={{
+                              display: 'flex',
+                              gap: 8,
+                              alignItems: 'center',
+                              margin: '4px 0',
+                            }}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={ratingSel.has(opt.key)}
+                              onChange={(e) => {
+                                setRatingSel((prev) => {
+                                  const next = new Set(prev);
+                                  if (e.target.checked) next.add(opt.key);
+                                  else next.delete(opt.key);
+                                  return next;
+                                });
+                              }}
+                            />
+                            <span>{opt.label}</span>
+                          </label>
+                        ))}
                       </div>
                       <div style={{ marginTop: 12 }}>
                         <button
