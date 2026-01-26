@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import shp from 'shpjs';
 import Papa from 'papaparse';
-import { geoMercator, geoPath } from 'd3-geo';
+import { geoCentroid, geoMercator, geoPath } from 'd3-geo';
 import { extent } from 'd3-array';
 import { scaleSequential, scaleDiverging } from 'd3-scale';
 import {
@@ -411,7 +411,7 @@ const RAIL_CONNECTORS = [
   },
 ];
 
-const DEFAULT_MODE = 'population'; // population | household | business | analysis
+const DEFAULT_MODE = 'population'; // population | household | business | analysis | restaurant
 
 const resolvePublicUrl = (path) => {
   const baseHref = new URL(import.meta.env.BASE_URL ?? '/', window.location.href);
@@ -428,6 +428,12 @@ const DEFAULT_DATA_FILES = {
   ],
   populationCsv: resolvePublicUrl('data/h03_27(茨木_人口).csv'),
   householdCsv: resolvePublicUrl('data/h06_01_27(茨木_世帯).csv'),
+  restaurantSuitaCsv: resolvePublicUrl('data/飲食店_吹田.csv'),
+  restaurantToyonakaCsv: resolvePublicUrl('data/飲食店_豊中.csv'),
+  restaurantSuitaGeoCsv: resolvePublicUrl('data/飲食店_吹田_緯度経度付き.csv'),
+  restaurantToyonakaGeoCsv: resolvePublicUrl(
+    'data/飲食店_豊中_緯度経度付き.csv'
+  ),
 };
 
 const TARGET_CITY_CODES = ['27211', '27207', '27205', '27203'];
@@ -451,6 +457,11 @@ const CITY_NAME_TO_CODE = Object.fromEntries(
 );
 
 const CITY_BOUNDARY_GEOJSON_PATH = 'data/市境.geojson';
+
+const RESTAURANT_CITY_COLORS = {
+  '27205': '#ff7f50',
+  '27203': '#6a5acd',
+};
 
 // h06（世帯）階層（キー=列名）
 const HOUSEHOLD_HIERARCHY = {
@@ -663,6 +674,70 @@ function parseCsvText(text) {
   return cleaned;
 }
 
+function normalizeStationLabel(text) {
+  if (!text) return '';
+  return text
+    .replace(/駅.*/g, '')
+    .replace(/（.*?）/g, '')
+    .replace(/\s+/g, '')
+    .trim();
+}
+
+function parseStationDistance(raw) {
+  if (!raw) return { stationName: '', distanceMeters: null };
+  const stationName = normalizeStationLabel(raw);
+  const match = raw.match(/([0-9,.]+)\s*(km|m)/i);
+  if (!match) return { stationName, distanceMeters: null };
+  const value = Number(match[1].replace(/,/g, ''));
+  if (!Number.isFinite(value)) return { stationName, distanceMeters: null };
+  const unit = match[2].toLowerCase();
+  const distanceMeters = unit === 'km' ? value * 1000 : value;
+  return { stationName, distanceMeters };
+}
+
+function hashStringToAngle(text) {
+  let hash = 0;
+  const str = text || '';
+  for (let i = 0; i < str.length; i += 1) {
+    hash = (hash << 5) - hash + str.charCodeAt(i);
+    hash |= 0;
+  }
+  const normalized = Math.abs(hash % 360);
+  return (normalized * Math.PI) / 180;
+}
+
+function offsetLatLon({ lat, lon }, distanceMeters, angleRad) {
+  if (!Number.isFinite(distanceMeters) || distanceMeters <= 0)
+    return { lat, lon };
+  const metersPerDegLat = 111320;
+  const latRad = (lat * Math.PI) / 180;
+  const metersPerDegLon = metersPerDegLat * Math.cos(latRad);
+  const dLat = (distanceMeters * Math.cos(angleRad)) / metersPerDegLat;
+  const dLon = (distanceMeters * Math.sin(angleRad)) / metersPerDegLon;
+  return { lat: lat + dLat, lon: lon + dLon };
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function buildCsvContent(rows, columns) {
+  const csv = Papa.unparse(rows, { columns });
+  return `\ufeff${csv}`;
+}
+
+function downloadCsv(content, filename) {
+  const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
 function buildCompositeKeyFromRow(row, areaCodeLengths, shapeKeySet) {
   const lengths = areaCodeLengths?.length ? areaCodeLengths : null;
 
@@ -754,6 +829,36 @@ function buildCityNameMap(geojson) {
     const code = key.slice(0, 5);
     const name = normalizeKeyString(feature?.properties?.CITY_NAME);
     if (name && !map.has(code)) map.set(code, name);
+  }
+  return map;
+}
+
+function buildCityCentroidMap(geojson) {
+  const map = new Map();
+  if (!geojson?.features?.length) return map;
+  const buckets = new Map();
+  for (const feature of geojson.features) {
+    const code = getCityCodeFromFeature(feature);
+    if (!code) continue;
+    const centroid = geoCentroid(feature);
+    if (
+      !Array.isArray(centroid) ||
+      centroid.length !== 2 ||
+      !Number.isFinite(centroid[0]) ||
+      !Number.isFinite(centroid[1])
+    )
+      continue;
+    const list = buckets.get(code) || [];
+    list.push(centroid);
+    buckets.set(code, list);
+  }
+  for (const [code, list] of buckets.entries()) {
+    if (!list.length) continue;
+    const sum = list.reduce(
+      (acc, [lon, lat]) => [acc[0] + lon, acc[1] + lat],
+      [0, 0]
+    );
+    map.set(code, { lon: sum[0] / list.length, lat: sum[1] / list.length });
   }
   return map;
 }
@@ -1058,6 +1163,14 @@ export default function App() {
   const [hhErr, setHhErr] = useState('');
 
   const [bizRows, setBizRows] = useState(null);
+  const [restaurantRows, setRestaurantRows] = useState(null);
+  const [restaurantErr, setRestaurantErr] = useState('');
+  const [restaurantGeoStatus, setRestaurantGeoStatus] = useState('');
+  const [restaurantGeoProgress, setRestaurantGeoProgress] = useState({
+    done: 0,
+    total: 0,
+  });
+  const [restaurantGeoRunning, setRestaurantGeoRunning] = useState(false);
   const [dataLoading, setDataLoading] = useState(false);
 
   // UI状態
@@ -1065,6 +1178,7 @@ export default function App() {
   const [showRail, setShowRail] = useState(true);
   const [railWidth, setRailWidth] = useState(2.4); // ★追加：線幅
   const [stationRadius, setStationRadius] = useState(5);
+  const [restaurantRadius, setRestaurantRadius] = useState(4);
   const [boldCityBoundary, setBoldCityBoundary] = useState(false);
   const [scaleScope, setScaleScope] = useState('visible'); // visible | all
 
@@ -1101,6 +1215,14 @@ export default function App() {
 
   const railGeo = useMemo(() => buildRailGeoJson(), []);
   const stations = useMemo(() => collectStations(), []);
+  const stationLookup = useMemo(() => {
+    const map = new Map();
+    for (const station of stations) {
+      const key = normalizeStationLabel(station.name);
+      if (key && !map.has(key)) map.set(key, station);
+    }
+    return map;
+  }, [stations]);
   const activeCityCodes = useMemo(() => {
     const available = getCityCodesFromGeojson(shapeGeo);
     if (!available.length) return [];
@@ -1112,6 +1234,10 @@ export default function App() {
   }, [shapeGeo]);
   const [selectedCityCodes, setSelectedCityCodes] = useState([]);
   const cityNameMap = useMemo(() => buildCityNameMap(shapeGeo), [shapeGeo]);
+  const cityCentroidMap = useMemo(
+    () => buildCityCentroidMap(shapeGeo),
+    [shapeGeo]
+  );
   const activeCityNames = useMemo(
     () =>
       activeCityCodes.map(
@@ -1190,12 +1316,17 @@ export default function App() {
       setShapeErr('');
       setPopErr('');
       setHhErr('');
+      setRestaurantErr('');
+      setRestaurantGeoStatus('');
+      setRestaurantGeoProgress({ done: 0, total: 0 });
+      setRestaurantGeoRunning(false);
       setBoundaryErr('');
       setShapeGeo(null);
       setBoundaryGeo(null);
       setBoundaryUrl('');
       setPopRows(null);
       setHhRows(null);
+      setRestaurantRows(null);
 
       const loadShape = async () => {
         if (DEFAULT_DATA_FILES.shapeBases?.length) {
@@ -1204,11 +1335,34 @@ export default function App() {
         throw new Error('地図データのパスが指定されていません');
       };
 
-      const [shapeRes, popRes, hhRes, boundaryRes] =
-        await Promise.allSettled([
+      const loadRestaurantCsv = async (primaryUrl, fallbackUrl) => {
+        try {
+          return await fetchBuffer(primaryUrl);
+        } catch (primaryError) {
+          if (!fallbackUrl) throw primaryError;
+          return fetchBuffer(fallbackUrl);
+        }
+      };
+
+      const [
+        shapeRes,
+        popRes,
+        hhRes,
+        restaurantSuitaRes,
+        restaurantToyonakaRes,
+        boundaryRes,
+      ] = await Promise.allSettled([
         loadShape(),
         fetchBuffer(DEFAULT_DATA_FILES.populationCsv),
         fetchBuffer(DEFAULT_DATA_FILES.householdCsv),
+        loadRestaurantCsv(
+          DEFAULT_DATA_FILES.restaurantSuitaGeoCsv,
+          DEFAULT_DATA_FILES.restaurantSuitaCsv
+        ),
+        loadRestaurantCsv(
+          DEFAULT_DATA_FILES.restaurantToyonakaGeoCsv,
+          DEFAULT_DATA_FILES.restaurantToyonakaCsv
+        ),
         loadCityBoundaryGeoJson(),
       ]);
 
@@ -1267,6 +1421,36 @@ export default function App() {
         }
       } else {
         setHhErr(hhRes.reason?.message || String(hhRes.reason));
+      }
+
+      const restaurantErrors = [];
+      const restaurantRowsCombined = [];
+      const restaurantSources = [
+        { res: restaurantSuitaRes, source: '吹田市' },
+        { res: restaurantToyonakaRes, source: '豊中市' },
+      ];
+      for (const { res, source } of restaurantSources) {
+        if (res.status === 'fulfilled') {
+          try {
+            const rows = loadCsvFromBuffer(res.value).map((row) => ({
+              ...row,
+              読み込み元: source,
+            }));
+            restaurantRowsCombined.push(...rows);
+          } catch (e) {
+            restaurantErrors.push(e?.message || String(e));
+          }
+        } else {
+          restaurantErrors.push(res.reason?.message || String(res.reason));
+        }
+      }
+      if (restaurantRowsCombined.length) {
+        if (!active) return;
+        setRestaurantRows(restaurantRowsCombined);
+      }
+      if (restaurantErrors.length) {
+        if (!active) return;
+        setRestaurantErr(restaurantErrors.join(' / '));
       }
 
       if (active) setDataLoading(false);
@@ -1419,6 +1603,8 @@ export default function App() {
       if (!key) return;
       map.set(key, val);
     };
+
+    if (mode === 'restaurant') return map;
 
     const targetCityCodes = targetCodes?.length
       ? new Set(targetCodes)
@@ -1588,6 +1774,7 @@ export default function App() {
 
   // --- Stats + color scale ---
   const valueStats = useMemo(() => {
+    if (mode === 'restaurant') return { min: 0, max: 1, mid: null };
     const scopeGeo =
       scaleScope === 'all' ? shapeGeo : displayShapeGeo;
     const scopeValues =
@@ -1619,6 +1806,9 @@ export default function App() {
   ]);
 
   const colorForValue = useMemo(() => {
+    if (mode === 'restaurant') {
+      return () => '#f4f4f4';
+    }
     const { min, max } = valueStats;
 
     if (mode === 'analysis') {
@@ -1699,6 +1889,78 @@ export default function App() {
       .filter(Boolean);
   }, [stations, projection]);
 
+  const restaurantPoints = useMemo(() => {
+    if (!restaurantRows?.length || !projection) return [];
+    const points = [];
+    for (const row of restaurantRows) {
+      const name = normalizeKeyString(row['店の名前']);
+      if (!name) continue;
+      const address = normalizeKeyString(row['住所']);
+      const latValue = safeToNumber(row['緯度']);
+      const lonValue = safeToNumber(row['経度']);
+      let cityCode = '';
+      for (const [cityName, code] of Object.entries(CITY_NAME_TO_CODE)) {
+        if (address.includes(cityName)) {
+          cityCode = code;
+          break;
+        }
+      }
+      if (
+        selectedCityCodes.length &&
+        cityCode &&
+        !selectedCityCodes.includes(cityCode)
+      ) {
+        continue;
+      }
+      const { stationName, distanceMeters } = parseStationDistance(
+        row['駅からの距離']
+      );
+      const station = stationLookup.get(stationName);
+      let coord = null;
+      let hint = '';
+      if (latValue !== null && lonValue !== null) {
+        coord = { lat: latValue, lon: lonValue };
+        hint = '住所ジオコーディング';
+      } else if (station) {
+        const angle = hashStringToAngle(`${name}-${address}`);
+        const base = { lat: station.lat, lon: station.lon };
+        coord = offsetLatLon(base, distanceMeters ?? 0, angle);
+        hint = `${station.name}${distanceMeters ? ` 約${distanceMeters}m` : ''}`;
+      } else if (cityCode && cityCentroidMap.has(cityCode)) {
+        coord = cityCentroidMap.get(cityCode);
+        hint = '市域中心（推定）';
+      }
+
+      if (!coord) continue;
+      const projected = projection([coord.lon, coord.lat]);
+      if (!projected) continue;
+
+      points.push({
+        id: `${name}-${address}`,
+        name,
+        x: projected[0],
+        y: projected[1],
+        cityCode,
+        category: row['店のカテゴリ(キーワード)'],
+        description: row['紹介文'],
+        rating: row['評価'],
+        comments: row['コメント数'],
+        bookmarks: row['ブックマーク数'],
+        budgetNight: row['夜の予算'],
+        budgetLunch: row['昼の予算'],
+        address,
+        hint,
+      });
+    }
+    return points;
+  }, [
+    restaurantRows,
+    projection,
+    stationLookup,
+    cityCentroidMap,
+    selectedCityCodes,
+  ]);
+
   const cityLabel = useMemo(() => {
     if (!selectedCityNames.length) return '';
     return `（${selectedCityNames.join('・')}）`;
@@ -1706,6 +1968,100 @@ export default function App() {
 
   const winW = typeof window !== 'undefined' ? window.innerWidth : 1200;
   const winH = typeof window !== 'undefined' ? window.innerHeight : 800;
+
+  const handleRestaurantGeocode = async () => {
+    if (!restaurantRows?.length || restaurantGeoRunning) return;
+    setRestaurantGeoRunning(true);
+    setRestaurantGeoStatus('住所の緯度経度を取得中...');
+    setRestaurantGeoProgress({ done: 0, total: restaurantRows.length });
+
+    const rows = restaurantRows.map((row) => ({ ...row }));
+    const baseColumns = Object.keys(rows[0] || {}).filter(
+      (key) => key && key !== '読み込み元'
+    );
+    const columns = [
+      ...baseColumns.filter((key) => key !== '緯度' && key !== '経度'),
+      '緯度',
+      '経度',
+    ];
+
+    const errors = [];
+
+    for (let i = 0; i < rows.length; i += 1) {
+      const row = rows[i];
+      const address = normalizeKeyString(row['住所']);
+      if (!address) {
+        row['緯度'] = '';
+        row['経度'] = '';
+        continue;
+      }
+
+      try {
+        const res = await fetch(
+          `https://msearch.gsi.go.jp/address-search/AddressSearch?q=${encodeURIComponent(
+            address
+          )}`
+        );
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data) && data.length > 0) {
+            const coords = data[0]?.geometry?.coordinates;
+            if (Array.isArray(coords) && coords.length >= 2) {
+              row['経度'] = coords[0];
+              row['緯度'] = coords[1];
+            } else {
+              row['緯度'] = '';
+              row['経度'] = '';
+            }
+          } else {
+            row['緯度'] = '';
+            row['経度'] = '';
+          }
+        } else {
+          row['緯度'] = '';
+          row['経度'] = '';
+          errors.push(`${address}: ${res.status}`);
+        }
+      } catch (error) {
+        row['緯度'] = '';
+        row['経度'] = '';
+        errors.push(`${address}: ${error?.message || String(error)}`);
+      }
+
+      if ((i + 1) % 20 === 0 || i === rows.length - 1) {
+        setRestaurantGeoProgress({ done: i + 1, total: rows.length });
+      }
+      await sleep(150);
+    }
+
+    const exportRows = (subset) =>
+      subset.map((row) => {
+        const output = {};
+        for (const column of columns) {
+          output[column] = row[column] ?? '';
+        }
+        return output;
+      });
+
+    const suitaRows = rows.filter((row) => row['読み込み元'] === '吹田市');
+    const toyonakaRows = rows.filter((row) => row['読み込み元'] === '豊中市');
+
+    if (suitaRows.length) {
+      const content = buildCsvContent(exportRows(suitaRows), columns);
+      downloadCsv(content, '飲食店_吹田_緯度経度付き.csv');
+    }
+    if (toyonakaRows.length) {
+      const content = buildCsvContent(exportRows(toyonakaRows), columns);
+      downloadCsv(content, '飲食店_豊中_緯度経度付き.csv');
+    }
+
+    setRestaurantGeoRunning(false);
+    setRestaurantGeoStatus(
+      errors.length
+        ? `取得完了（エラー ${errors.length}件）`
+        : '取得完了'
+    );
+  };
 
   return (
     <div
@@ -1739,7 +2095,12 @@ export default function App() {
                 const k = normalizeKeyString(f?.properties?.KEY_CODE);
                 const v = featureValue.get(k);
                 const hasV = v !== null && v !== undefined && !Number.isNaN(v);
-                const fill = hasV ? colorForValue(Number(v)) : '#f2f2f2';
+                const fill =
+                  mode === 'restaurant'
+                    ? '#f4f4f4'
+                    : hasV
+                    ? colorForValue(Number(v))
+                    : '#f2f2f2';
 
                 return (
                   <path
@@ -1752,9 +2113,11 @@ export default function App() {
                         : 'rgba(0,0,0,0.35)'
                     }
                     strokeWidth={0.6 / transform.k}
-                    onMouseEnter={(e) => onFeatureEnter(e, f)}
-                    onMouseMove={onFeatureMove}
-                    onMouseLeave={onFeatureLeave}
+                    onMouseEnter={
+                      mode === 'restaurant' ? undefined : (e) => onFeatureEnter(e, f)
+                    }
+                    onMouseMove={mode === 'restaurant' ? undefined : onFeatureMove}
+                    onMouseLeave={mode === 'restaurant' ? undefined : onFeatureLeave}
                   />
                 );
               })}
@@ -1815,6 +2178,43 @@ export default function App() {
                   ))}
                 </>
               )}
+
+              {mode === 'restaurant' && restaurantPoints.length ? (
+                <g>
+                  {restaurantPoints.map((p) => (
+                    <circle
+                      key={p.id}
+                      cx={p.x}
+                      cy={p.y}
+                      r={restaurantRadius / transform.k}
+                      fill={RESTAURANT_CITY_COLORS[p.cityCode] || '#f55'}
+                      fillOpacity={0.7}
+                      stroke="rgba(0,0,0,0.35)"
+                      strokeWidth={0.6 / transform.k}
+                      onMouseEnter={(e) => {
+                        setHover({
+                          visible: true,
+                          x: e.clientX,
+                          y: e.clientY,
+                          title: p.name,
+                          lines: [
+                            p.category ? `カテゴリ: ${p.category}` : null,
+                            p.rating ? `評価: ${p.rating}` : null,
+                            p.comments ? `コメント数: ${p.comments}` : null,
+                            p.bookmarks ? `ブックマーク: ${p.bookmarks}` : null,
+                            p.budgetNight ? `夜予算: ${p.budgetNight}` : null,
+                            p.budgetLunch ? `昼予算: ${p.budgetLunch}` : null,
+                            p.address ? `住所: ${p.address}` : null,
+                            p.hint ? `位置推定: ${p.hint}` : null,
+                          ].filter(Boolean),
+                        });
+                      }}
+                      onMouseMove={onFeatureMove}
+                      onMouseLeave={onFeatureLeave}
+                    />
+                  ))}
+                </g>
+              ) : null}
             </g>
           )}
         </svg>
@@ -1923,7 +2323,7 @@ export default function App() {
               <div
                 style={{
                   display: 'grid',
-                  gridTemplateColumns: 'repeat(4, 1fr)',
+                  gridTemplateColumns: 'repeat(5, 1fr)',
                   gap: 6,
                   marginBottom: 12,
                 }}
@@ -1948,6 +2348,11 @@ export default function App() {
                   active={mode === 'analysis'}
                   onClick={() => setMode('analysis')}
                 />
+                <ModeBtn
+                  label="飲食店"
+                  active={mode === 'restaurant'}
+                  onClick={() => setMode('restaurant')}
+                />
               </div>
 
               {/* Built-in data */}
@@ -1968,6 +2373,7 @@ export default function App() {
                   </li>
                   <li>人口: h03_27(茨木_人口).csv</li>
                   <li>世帯: h06_01_27(茨木_世帯).csv</li>
+                  <li>飲食店: 飲食店_吹田.csv / 飲食店_豊中.csv</li>
                 </ul>
                 {selectedCityCodes.length ? (
                   <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>
@@ -1983,6 +2389,7 @@ export default function App() {
                 {boundaryErr ? <ErrBox text={boundaryErr} /> : null}
                 {popErr ? <ErrBox text={popErr} /> : null}
                 {hhErr ? <ErrBox text={hhErr} /> : null}
+                {restaurantErr ? <ErrBox text={restaurantErr} /> : null}
               </Section>
 
               <Section title="表示設定">
@@ -2401,6 +2808,74 @@ export default function App() {
                 </Section>
               )}
 
+              {mode === 'restaurant' && (
+                <Section title="飲食店モード（駅距離から位置を推定）">
+                  {!restaurantRows ? (
+                    <div style={{ fontSize: 12, opacity: 0.75 }}>
+                      飲食店データが読み込まれるとプロットが有効になります。
+                    </div>
+                  ) : (
+                    <>
+                      <div style={{ fontSize: 12, opacity: 0.85 }}>
+                        駅からの距離をもとに、駅周辺へ円状にばらしてプロットしています。
+                      </div>
+                      <div style={{ marginTop: 10 }}>
+                        <div
+                          style={{
+                            fontSize: 12,
+                            fontWeight: 700,
+                            marginBottom: 6,
+                          }}
+                        >
+                          マーカーサイズ
+                        </div>
+                        <input
+                          type="range"
+                          min={2}
+                          max={10}
+                          step={1}
+                          value={restaurantRadius}
+                          onChange={(e) =>
+                            setRestaurantRadius(Number(e.target.value))
+                          }
+                          style={{ width: '100%' }}
+                        />
+                        <div style={{ fontSize: 12, opacity: 0.8, marginTop: 4 }}>
+                          現在: {restaurantRadius}px
+                        </div>
+                      </div>
+                      <div style={{ marginTop: 10, fontSize: 12 }}>
+                        プロット件数: {restaurantRows.length}件
+                      </div>
+                      <div style={{ marginTop: 12 }}>
+                        <button
+                          type="button"
+                          style={btnStyle}
+                          onClick={handleRestaurantGeocode}
+                          disabled={restaurantGeoRunning}
+                        >
+                          緯度経度取得（国土地理院）
+                        </button>
+                      </div>
+                      <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>
+                        住所から緯度経度を取得し、CSVを自動ダウンロードします。
+                      </div>
+                      {restaurantGeoProgress.total > 0 && (
+                        <div style={{ marginTop: 6, fontSize: 12 }}>
+                          進捗: {restaurantGeoProgress.done}/
+                          {restaurantGeoProgress.total}
+                        </div>
+                      )}
+                      {restaurantGeoStatus ? (
+                        <div style={{ marginTop: 6, fontSize: 12 }}>
+                          {restaurantGeoStatus}
+                        </div>
+                      ) : null}
+                    </>
+                  )}
+                </Section>
+              )}
+
               {/* Data health */}
               <Section title="読み込み状況">
                 <div style={kvRow}>
@@ -2429,13 +2904,21 @@ export default function App() {
                     {bizRows ? `OK（${bizRows.length}行）` : '未（同梱なし）'}
                   </span>
                 </div>
+                <div style={kvRow}>
+                  <span style={kvKey}>飲食店</span>
+                  <span style={kvVal}>
+                    {restaurantRows
+                      ? `OK（${restaurantRows.length}行）`
+                      : '未'}
+                  </span>
+                </div>
               </Section>
             </div>
           )}
         </div>
 
         {/* Legend */}
-        {displayShapeGeo && (
+        {displayShapeGeo && mode !== 'restaurant' && (
           <Legend
             mode={mode}
             min={valueStats.min}
