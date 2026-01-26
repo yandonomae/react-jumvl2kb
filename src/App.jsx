@@ -2414,6 +2414,32 @@ export default function App() {
     return statsMap;
   }, [stations, restaurantPoints]);
 
+  const stationSummaryRows = useMemo(() => {
+    if (!stations.length) return [];
+    const toCsvNumber = (value) => {
+      if (value === null || value === undefined || value === '') return '';
+      const num = Number(value);
+      if (!Number.isFinite(num)) return '';
+      return num.toLocaleString('ja-JP', { maximumFractionDigits: 4 });
+    };
+    return stations.map((station) => {
+      const stats = stationStats.get(station.id);
+      const topCategories = stats?.topCategories ?? [];
+      return {
+        駅名: station.name,
+        乗降客数: toCsvNumber(RIDERSHIP_BY_STATION_ID[station.id]),
+        '500m圏内の飲食店数': toCsvNumber(stats?.count ?? 0),
+        頻出カテゴリ1位: topCategories[0]?.name ?? '',
+        頻出カテゴリ2位: topCategories[1]?.name ?? '',
+        頻出カテゴリ3位: topCategories[2]?.name ?? '',
+        コメント合計: toCsvNumber(stats?.commentTotal ?? 0),
+        ブックマーク合計: toCsvNumber(stats?.bookmarkTotal ?? 0),
+        平均昼予算: toCsvNumber(stats?.avgLunchBudget ?? null),
+        平均夜予算: toCsvNumber(stats?.avgNightBudget ?? null),
+      };
+    });
+  }, [stations, stationStats]);
+
   const restaurantGrid = useMemo(() => {
     if (mode !== 'restaurant-analysis') return [];
     if (!projection) return [];
@@ -2681,6 +2707,24 @@ export default function App() {
         ? `取得完了（エラー ${errors.length}件）`
         : '取得完了'
     );
+  };
+
+  const handleStationSummaryDownload = () => {
+    if (!stationSummaryRows.length) return;
+    const columns = [
+      '駅名',
+      '乗降客数',
+      '500m圏内の飲食店数',
+      '頻出カテゴリ1位',
+      '頻出カテゴリ2位',
+      '頻出カテゴリ3位',
+      'コメント合計',
+      'ブックマーク合計',
+      '平均昼予算',
+      '平均夜予算',
+    ];
+    const content = buildCsvContent(stationSummaryRows, columns);
+    downloadCsv(content, '駅_500m圏内_飲食店集計.csv');
   };
 
   return (
@@ -3822,6 +3866,25 @@ export default function App() {
                       </div>
                       <div style={{ marginTop: 10, fontSize: 12 }}>
                         プロット件数: {restaurantPoints.length}件
+                      </div>
+                      <div style={{ marginTop: 12 }}>
+                        <button
+                          type="button"
+                          style={btnStyle}
+                          onClick={handleStationSummaryDownload}
+                          disabled={
+                            !showStationCatchment || !stationSummaryRows.length
+                          }
+                        >
+                          駅500m圏内の全駅CSVをダウンロード
+                        </button>
+                        <div
+                          style={{ marginTop: 6, fontSize: 12, opacity: 0.8 }}
+                        >
+                          {showStationCatchment
+                            ? '駅500m圏内の飲食店集計をCSVで出力します。'
+                            : '駅500m圏を表示中にダウンロードできます。'}
+                        </div>
                       </div>
                       <div
                         style={{
