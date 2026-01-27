@@ -3231,23 +3231,6 @@ export default function App() {
                       />
                     );
                   })}
-                  {restaurantClusters.map((cluster, index) =>
-                    cluster.count > 1 ? (
-                      <text
-                        key={`cluster-count-${cluster.id || index}`}
-                        x={cluster.x}
-                        y={cluster.y}
-                        textAnchor="middle"
-                        dominantBaseline="central"
-                        fill="#fff"
-                        fontSize={12 / transform.k}
-                        fontWeight={700}
-                        style={{ pointerEvents: 'none' }}
-                      >
-                        {cluster.count}
-                      </text>
-                    ) : null
-                  )}
                 </g>
               ) : null}
 
@@ -3313,6 +3296,27 @@ export default function App() {
                   ))}
                 </>
               )}
+
+              {/* Restaurant cluster labels (above all circles) */}
+              {mode === 'restaurant' && restaurantClusters.length
+                ? restaurantClusters.map((cluster, index) =>
+                    cluster.count > 1 ? (
+                      <text
+                        key={`cluster-count-${cluster.id || index}`}
+                        x={cluster.x}
+                        y={cluster.y}
+                        textAnchor="middle"
+                        dominantBaseline="central"
+                        fill="#fff"
+                        fontSize={12 / transform.k}
+                        fontWeight={700}
+                        style={{ pointerEvents: 'none' }}
+                      >
+                        {cluster.count}
+                      </text>
+                    ) : null
+                  )
+                : null}
 
               {/* Station labels (topmost) */}
               {showRail && mode !== 'ridership'
