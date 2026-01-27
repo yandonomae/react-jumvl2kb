@@ -785,6 +785,17 @@ function loadCsvFromBuffer(buf) {
   return parseCsvText(text);
 }
 
+function looksLikeHtml(text) {
+  if (!text) return false;
+  const sample = text.trim().slice(0, 300).toLowerCase();
+  return sample.includes('<!doctype html') || sample.includes('<html');
+}
+
+function looksLikeRestaurantCsv(text) {
+  if (!text) return false;
+  return text.includes('店の名前') && text.includes('住所');
+}
+
 function findHeaderRowIndex(lines) {
   const maxScan = Math.min(lines.length, 60);
   for (let i = 0; i < maxScan; i++) {
@@ -1655,11 +1666,23 @@ export default function App() {
       };
 
       const loadRestaurantCsv = async (primaryUrl, fallbackUrl) => {
+        const fetchRestaurantBuffer = async (url) => {
+          const buf = await fetchBuffer(url);
+          const text = decodeArrayBufferSmart(buf);
+          if (looksLikeHtml(text)) {
+            throw new Error(`飲食店CSVがHTMLで返されました: ${url}`);
+          }
+          if (!looksLikeRestaurantCsv(text)) {
+            throw new Error(`飲食店CSVのヘッダーが不正です: ${url}`);
+          }
+          return buf;
+        };
+
         try {
-          return await fetchBuffer(primaryUrl);
+          return await fetchRestaurantBuffer(primaryUrl);
         } catch (primaryError) {
           if (!fallbackUrl) throw primaryError;
-          return fetchBuffer(fallbackUrl);
+          return fetchRestaurantBuffer(fallbackUrl);
         }
       };
 
