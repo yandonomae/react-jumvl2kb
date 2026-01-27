@@ -700,6 +700,16 @@ function formatNumber(n) {
   return x.toLocaleString('ja-JP', { maximumFractionDigits: 4 });
 }
 
+function formatDecimal(n, digits = 1) {
+  if (n === null || n === undefined || Number.isNaN(n)) return '-';
+  const x = Number(n);
+  if (!Number.isFinite(x)) return '-';
+  return x.toLocaleString('ja-JP', {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  });
+}
+
 function safeToNumber(v) {
   if (v === null || v === undefined) return null;
   const s = String(v).trim();
@@ -2447,7 +2457,7 @@ export default function App() {
       new Map(
         stationScreenPoints.map((s) => [
           s.id,
-          { x: s.screenX, y: s.screenY, name: s.name },
+          { x: s.screenX, y: s.screenY, name: s.name, lineId: s.lineId },
         ])
       ),
     [stationScreenPoints]
@@ -2621,6 +2631,8 @@ export default function App() {
       let count = 0;
       let commentTotal = 0;
       let bookmarkTotal = 0;
+      let ratingSum = 0;
+      let ratingCount = 0;
       const categories = new Map();
       const nightBudgets = [];
       const lunchBudgets = [];
@@ -2640,6 +2652,11 @@ export default function App() {
         if (comments !== null) commentTotal += comments;
         const bookmarks = safeToNumber(point.bookmarks);
         if (bookmarks !== null) bookmarkTotal += bookmarks;
+        const ratingValue = safeToNumber(point.ratingValue);
+        if (ratingValue !== null) {
+          ratingSum += ratingValue;
+          ratingCount += 1;
+        }
 
         const nightBudget = parseBudgetValue(point.budgetNight);
         if (nightBudget !== null) nightBudgets.push(nightBudget);
@@ -2671,6 +2688,7 @@ export default function App() {
         topCategories,
         commentTotal,
         bookmarkTotal,
+        avgRating: ratingCount ? ratingSum / ratingCount : null,
         avgNightBudget: average(nightBudgets),
         avgLunchBudget: average(lunchBudgets),
       });
@@ -3462,11 +3480,47 @@ export default function App() {
               const stationPos = stationScreenLookup.get(id);
               if (!stationPos) return null;
               const stats = stationStats.get(id);
-              const topCategoryLabel = stats?.topCategories?.length
-                ? stats.topCategories
-                    .map((c) => `${c.name} (${c.count})`)
-                    .join(' / ')
-                : '—';
+              const ridership = RIDERSHIP_BY_STATION_ID[id];
+              const topCategories = stats?.topCategories ?? [];
+              const averageComments =
+                stats?.count ? stats.commentTotal / stats.count : null;
+              const averageBookmarks =
+                stats?.count ? stats.bookmarkTotal / stats.count : null;
+              const lineLabel = stationPos.lineId
+                ? `(${stationPos.lineId})`
+                : '';
+              const topCategoryRows = Array.from({ length: 5 }, (_, index) => {
+                const item = topCategories[index];
+                return item ? `・${item.name} (${item.count})` : '・—';
+              });
+              const popupText = [
+                `乗降客数: ${formatNumber(ridership ?? 0)}`,
+                `飲食店数: ${formatNumber(stats?.count ?? 0)}`,
+                `平均評価: ${formatDecimal(stats?.avgRating ?? null)}`,
+                `コメント合計: ${formatNumber(stats?.commentTotal ?? 0)}`,
+                `（一店舗あたり平均：${formatDecimal(
+                  averageComments ?? null
+                )}）`,
+                `ブックマーク合計: ${formatNumber(stats?.bookmarkTotal ?? 0)}`,
+                `（一店舗あたり平均：${formatDecimal(
+                  averageBookmarks ?? null
+                )}）`,
+                `平均昼予算: ${
+                  stats?.avgLunchBudget !== null &&
+                  stats?.avgLunchBudget !== undefined
+                    ? `￥${formatDecimal(stats.avgLunchBudget)}`
+                    : '—'
+                }`,
+                `平均夜予算: ${
+                  stats?.avgNightBudget !== null &&
+                  stats?.avgNightBudget !== undefined
+                    ? `￥${formatDecimal(stats.avgNightBudget)}`
+                    : '—'
+                }`,
+                '',
+                '頻出カテゴリ上位5:',
+                ...topCategoryRows,
+              ].join('\n');
               return (
                 <div
                   key={`indicator-${id}`}
@@ -3505,7 +3559,10 @@ export default function App() {
                       });
                     }}
                   >
-                    <span>{stationPos.name}</span>
+                    <span>
+                      {stationPos.name}
+                      {lineLabel}
+                    </span>
                     <button
                       type="button"
                       style={{
@@ -3525,29 +3582,8 @@ export default function App() {
                       ×
                     </button>
                   </div>
-                  <div style={{ padding: '8px 10px' }}>
-                    <div>飲食店数: {formatNumber(stats?.count ?? 0)}</div>
-                    <div>頻出カテゴリ上位5: {topCategoryLabel}</div>
-                    <div>
-                      コメント合計: {formatNumber(stats?.commentTotal ?? 0)}
-                    </div>
-                    <div>
-                      ブックマーク合計: {formatNumber(stats?.bookmarkTotal ?? 0)}
-                    </div>
-                    <div>
-                      平均昼予算:{' '}
-                      {stats?.avgLunchBudget !== null &&
-                      stats?.avgLunchBudget !== undefined
-                        ? `￥${formatNumber(stats.avgLunchBudget)}`
-                        : '—'}
-                    </div>
-                    <div>
-                      平均夜予算:{' '}
-                      {stats?.avgNightBudget !== null &&
-                      stats?.avgNightBudget !== undefined
-                        ? `￥${formatNumber(stats.avgNightBudget)}`
-                        : '—'}
-                    </div>
+                  <div style={{ padding: '8px 10px', whiteSpace: 'pre-line' }}>
+                    {popupText}
                   </div>
                 </div>
               );
