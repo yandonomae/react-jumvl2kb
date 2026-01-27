@@ -47,10 +47,16 @@ const RESTAURANT_MARKER_COLORS = [
   { value: 'blue', label: '青', color: '#1e88e5' },
 ];
 
-const buildRestaurantClusters = (points, baseRadius, zoomScale) => {
+const buildRestaurantClusters = (
+  points,
+  baseRadius,
+  zoomScale,
+  overlapThreshold = 0
+) => {
   if (!points.length) return [];
   const safeZoom = Number.isFinite(zoomScale) && zoomScale !== 0 ? zoomScale : 1;
   const baseRadiusMap = baseRadius / safeZoom;
+  const overlapRatio = Math.max(0, overlapThreshold);
   let clusters = points.map((p) => ({
     sumX: p.x,
     sumY: p.y,
@@ -92,7 +98,12 @@ const buildRestaurantClusters = (points, baseRadius, zoomScale) => {
         const centerBY = clusterB.sumY / clusterB.count;
         const distance = Math.hypot(centerAX - centerBX, centerAY - centerBY);
         const radiusB = baseRadiusMap * (1 + 0.1 * clusterB.count);
-        if (distance <= Math.max(radiusA, radiusB)) {
+        const maxRadius = Math.max(radiusA, radiusB);
+        const minRadius = Math.min(radiusA, radiusB);
+        if (
+          distance <= maxRadius &&
+          maxRadius - distance >= minRadius * overlapRatio
+        ) {
           unionRoot(i, j);
         }
       }
@@ -1593,6 +1604,10 @@ export default function App() {
   const [stationRadius, setStationRadius] = useState(5);
   const [restaurantRadius, setRestaurantRadius] = useState(4);
   const [restaurantRadiusDraft, setRestaurantRadiusDraft] = useState(4);
+  const [restaurantOverlapThreshold, setRestaurantOverlapThreshold] =
+    useState(0);
+  const [restaurantOverlapThresholdDraft, setRestaurantOverlapThresholdDraft] =
+    useState(0);
   const [showStationCatchment, setShowStationCatchment] = useState(false);
   const [boldCityBoundary, setBoldCityBoundary] = useState(false);
   const [showBaseMapLayer, setShowBaseMapLayer] = useState(true);
@@ -2561,9 +2576,10 @@ export default function App() {
       buildRestaurantClusters(
         restaurantPoints,
         restaurantRadius,
-        transform.k
+        transform.k,
+        restaurantOverlapThreshold / 100
       ),
-    [restaurantPoints, restaurantRadius, transform.k]
+    [restaurantPoints, restaurantRadius, transform.k, restaurantOverlapThreshold]
   );
 
   const restaurantGeoPoints = useMemo(() => {
@@ -4312,6 +4328,58 @@ export default function App() {
                           <div style={{ fontSize: 12, opacity: 0.8 }}>
                             現在: {restaurantRadius}px / 指定: {restaurantRadiusDraft}
                             px
+                          </div>
+                        </div>
+                      </div>
+                      <div style={{ marginTop: 12 }}>
+                        <div
+                          style={{
+                            fontSize: 12,
+                            fontWeight: 700,
+                            marginBottom: 6,
+                          }}
+                        >
+                          重なり判定のしきい値
+                        </div>
+                        <input
+                          type="range"
+                          min={0}
+                          max={100}
+                          step={5}
+                          value={restaurantOverlapThresholdDraft}
+                          onChange={(e) =>
+                            setRestaurantOverlapThresholdDraft(
+                              Number(e.target.value)
+                            )
+                          }
+                          style={{ width: '100%' }}
+                        />
+                        <div
+                          style={{
+                            marginTop: 8,
+                            display: 'flex',
+                            gap: 8,
+                            alignItems: 'center',
+                          }}
+                        >
+                          <button
+                            type="button"
+                            style={btnStyle}
+                            onClick={() =>
+                              setRestaurantOverlapThreshold(
+                                restaurantOverlapThresholdDraft
+                              )
+                            }
+                            disabled={
+                              restaurantOverlapThresholdDraft ===
+                              restaurantOverlapThreshold
+                            }
+                          >
+                            更新
+                          </button>
+                          <div style={{ fontSize: 12, opacity: 0.8 }}>
+                            現在: {restaurantOverlapThreshold}% / 指定:{' '}
+                            {restaurantOverlapThresholdDraft}%
                           </div>
                         </div>
                       </div>
