@@ -2633,6 +2633,10 @@ export default function App() {
       let bookmarkTotal = 0;
       let ratingSum = 0;
       let ratingCount = 0;
+      let ratingMissing = 0;
+      const ratingBuckets = new Map(
+        ratingRanges.map((range) => [range.key, { ...range, count: 0 }])
+      );
       const categories = new Map();
       const nightBudgets = [];
       const lunchBudgets = [];
@@ -2656,6 +2660,11 @@ export default function App() {
         if (ratingValue !== null) {
           ratingSum += ratingValue;
           ratingCount += 1;
+          const ratingKey = getRatingRangeKey(ratingValue);
+          const bucket = ratingBuckets.get(ratingKey);
+          if (bucket) bucket.count += 1;
+        } else {
+          ratingMissing += 1;
         }
 
         const nightBudget = parseBudgetValue(point.budgetNight);
@@ -2691,10 +2700,12 @@ export default function App() {
         avgRating: ratingCount ? ratingSum / ratingCount : null,
         avgNightBudget: average(nightBudgets),
         avgLunchBudget: average(lunchBudgets),
+        ratingDistribution: Array.from(ratingBuckets.values()),
+        ratingMissing,
       });
     }
     return statsMap;
-  }, [stations, restaurantPoints]);
+  }, [stations, restaurantPoints, ratingRanges]);
 
   const stationSummaryRows = useMemo(() => {
     if (!stations.length) return [];
@@ -3489,6 +3500,13 @@ export default function App() {
               const lineLabel = stationPos.lineId
                 ? `(${stationPos.lineId})`
                 : '';
+              const ratingDistribution = stats?.ratingDistribution ?? [];
+              const ratingMissing = stats?.ratingMissing ?? 0;
+              const ratingMax = Math.max(
+                1,
+                ratingMissing,
+                ...ratingDistribution.map((row) => row.count)
+              );
               const topCategoryRows = Array.from({ length: 5 }, (_, index) => {
                 const item = topCategories[index];
                 return item ? `・${item.name} (${item.count})` : '・—';
@@ -3584,6 +3602,92 @@ export default function App() {
                   </div>
                   <div style={{ padding: '8px 10px', whiteSpace: 'pre-line' }}>
                     {popupText}
+                  </div>
+                  <div
+                    style={{
+                      padding: '0 10px 10px',
+                      borderTop: '1px solid rgba(0,0,0,0.08)',
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontWeight: 700,
+                        margin: '6px 0 6px',
+                        fontSize: 12,
+                      }}
+                    >
+                      評価分布
+                    </div>
+                    <div
+                      style={{
+                        display: 'grid',
+                        gap: 4,
+                      }}
+                    >
+                      {ratingDistribution.map((row) => (
+                        <div
+                          key={`rating-${id}-${row.key}`}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 6,
+                            fontSize: 11,
+                          }}
+                        >
+                          <span style={{ width: 88 }}>{row.label}</span>
+                          <div
+                            style={{
+                              flex: 1,
+                              height: 8,
+                              background: 'rgba(0,0,0,0.08)',
+                              borderRadius: 4,
+                              overflow: 'hidden',
+                            }}
+                          >
+                            <div
+                              style={{
+                                width: `${(row.count / ratingMax) * 100}%`,
+                                height: '100%',
+                                background: '#3b82f6',
+                              }}
+                            />
+                          </div>
+                          <span style={{ width: 26, textAlign: 'right' }}>
+                            {row.count}
+                          </span>
+                        </div>
+                      ))}
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 6,
+                          fontSize: 11,
+                        }}
+                      >
+                        <span style={{ width: 88 }}>評価なし</span>
+                        <div
+                          style={{
+                            flex: 1,
+                            height: 8,
+                            background: 'rgba(0,0,0,0.08)',
+                            borderRadius: 4,
+                            overflow: 'hidden',
+                          }}
+                        >
+                          <div
+                            style={{
+                              width: `${(ratingMissing / ratingMax) * 100}%`,
+                              height: '100%',
+                              background: '#94a3b8',
+                            }}
+                          />
+                        </div>
+                        <span style={{ width: 26, textAlign: 'right' }}>
+                          {ratingMissing}
+                        </span>
+                      </div>
+                    </div>
                   </div>
                 </div>
               );
