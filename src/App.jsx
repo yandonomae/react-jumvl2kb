@@ -29,6 +29,24 @@ const LINE_COLORS = {
   HANKYU: '#0EA641', // rgb(14,166,65)
 };
 
+const BASE_MAP_STYLES = [
+  {
+    value: 'osm',
+    label: 'OpenStreetMap',
+    buildUrl: (z, x, y) => `https://tile.openstreetmap.org/${z}/${x}/${y}.png`,
+  },
+  {
+    value: 'google',
+    label: 'Google マップ',
+    buildUrl: (z, x, y) => `https://mt1.google.com/vt/lyrs=m&x=${x}&y=${y}&z=${z}`,
+  },
+];
+
+const RESTAURANT_MARKER_COLORS = [
+  { value: 'red', label: '赤', color: '#e53935' },
+  { value: 'blue', label: '青', color: '#1e88e5' },
+];
+
 // 路線データ（[lon, lat]）
 const RAIL_LINES = [
   {
@@ -1491,6 +1509,7 @@ export default function App() {
   const [showStationCatchment, setShowStationCatchment] = useState(false);
   const [boldCityBoundary, setBoldCityBoundary] = useState(false);
   const [showBaseMapLayer, setShowBaseMapLayer] = useState(true);
+  const [baseMapStyle, setBaseMapStyle] = useState('osm');
   const [scaleScope, setScaleScope] = useState('visible'); // visible | all
 
   // 人口
@@ -1510,6 +1529,7 @@ export default function App() {
   // 飲食店（評価フィルタ）
   const [ratingSel, setRatingSel] = useState(new Set());
   const [categorySel, setCategorySel] = useState(new Set());
+  const [restaurantMarkerColor, setRestaurantMarkerColor] = useState('red');
 
   // 駅インジケーター
   const [stationIndicators, setStationIndicators] = useState({});
@@ -2752,6 +2772,9 @@ export default function App() {
   const baseMapTiles = useMemo(() => {
     if (!showPlainBaseMapLayer || !projection || !width || !height) return [];
 
+    const styleConfig =
+      BASE_MAP_STYLES.find((style) => style.value === baseMapStyle) ||
+      BASE_MAP_STYLES[0];
     const scale = projection.scale() * transform.k;
     const zoomLevel = Math.round(
       Math.log2((scale * 2 * Math.PI) / TILE_SIZE)
@@ -2789,13 +2812,14 @@ export default function App() {
           y: topLeft[1],
           width: bottomRight[0] - topLeft[0],
           height: bottomRight[1] - topLeft[1],
-          url: `https://tile.openstreetmap.org/${z}/${x}/${y}.png`,
+          url: styleConfig.buildUrl(z, x, y),
         });
       }
     }
     return tiles;
   }, [
     showPlainBaseMapLayer,
+    baseMapStyle,
     projection,
     width,
     height,
@@ -3046,7 +3070,11 @@ export default function App() {
                       cx={p.x}
                       cy={p.y}
                       r={restaurantRadius / transform.k}
-                      fill="#e53935"
+                      fill={
+                        RESTAURANT_MARKER_COLORS.find(
+                          (opt) => opt.value === restaurantMarkerColor
+                        )?.color || '#e53935'
+                      }
                       fillOpacity={0.7}
                       stroke="rgba(0,0,0,0.35)"
                       strokeWidth={0.6 / transform.k}
@@ -3588,6 +3616,26 @@ export default function App() {
                     <span>普通の地図を最下層に表示</span>
                   </label>
                 )}
+                {isBaseMapToggleMode && showBaseMapLayer && (
+                  <div style={{ marginTop: 10 }}>
+                    <div
+                      style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}
+                    >
+                      背景地図の種類
+                    </div>
+                    <select
+                      value={baseMapStyle}
+                      onChange={(e) => setBaseMapStyle(e.target.value)}
+                      style={selectStyle}
+                    >
+                      {BASE_MAP_STYLES.map((style) => (
+                        <option key={style.value} value={style.value}>
+                          {style.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
 
                 <div style={{ marginTop: 10 }}>
                   <div
@@ -4057,6 +4105,40 @@ export default function App() {
                     <>
                       <div style={{ fontSize: 12, opacity: 0.85 }}>
                         駅からの距離をもとに、駅周辺へ円状にばらしてプロットしています。
+                      </div>
+                      <div style={{ marginTop: 10 }}>
+                        <div
+                          style={{
+                            fontSize: 12,
+                            fontWeight: 700,
+                            marginBottom: 6,
+                          }}
+                        >
+                          マーカー色
+                        </div>
+                        <div style={{ display: 'flex', gap: 12 }}>
+                          {RESTAURANT_MARKER_COLORS.map((opt) => (
+                            <label
+                              key={opt.value}
+                              style={{
+                                display: 'flex',
+                                gap: 6,
+                                alignItems: 'center',
+                              }}
+                            >
+                              <input
+                                type="radio"
+                                name="restaurant-marker-color"
+                                value={opt.value}
+                                checked={restaurantMarkerColor === opt.value}
+                                onChange={(e) =>
+                                  setRestaurantMarkerColor(e.target.value)
+                                }
+                              />
+                              <span>{opt.label}</span>
+                            </label>
+                          ))}
+                        </div>
                       </div>
                       <div style={{ marginTop: 10 }}>
                         <div
