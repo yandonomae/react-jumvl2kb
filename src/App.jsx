@@ -858,6 +858,28 @@ function hashStringToAngle(text) {
   return (normalized * Math.PI) / 180;
 }
 
+const GSI_ADDRESS_ENDPOINT =
+  'https://msearch.gsi.go.jp/address-search/AddressSearch';
+const GSI_CORS_PROXY = 'https://api.allorigins.win/raw?url=';
+
+async function fetchGsiAddressSearch(address) {
+  const baseUrl = `${GSI_ADDRESS_ENDPOINT}?q=${encodeURIComponent(address)}`;
+
+  try {
+    const res = await fetch(baseUrl);
+    if (res.ok) return await res.json();
+  } catch (error) {
+    // CORSやネットワークエラー時はフォールバックを試す
+  }
+
+  const proxyUrl = `${GSI_CORS_PROXY}${encodeURIComponent(baseUrl)}`;
+  const res = await fetch(proxyUrl);
+  if (!res.ok) {
+    throw new Error(`GSI検索に失敗: ${res.status}`);
+  }
+  return res.json();
+}
+
 function offsetLatLon({ lat, lon }, distanceMeters, angleRad) {
   if (!Number.isFinite(distanceMeters) || distanceMeters <= 0)
     return { lat, lon };
@@ -2787,22 +2809,12 @@ export default function App() {
       }
 
       try {
-        const res = await fetch(
-          `https://msearch.gsi.go.jp/address-search/AddressSearch?q=${encodeURIComponent(
-            address
-          )}`
-        );
-        if (res.ok) {
-          const data = await res.json();
-          if (Array.isArray(data) && data.length > 0) {
-            const coords = data[0]?.geometry?.coordinates;
-            if (Array.isArray(coords) && coords.length >= 2) {
-              row['経度'] = coords[0];
-              row['緯度'] = coords[1];
-            } else {
-              row['緯度'] = '';
-              row['経度'] = '';
-            }
+        const data = await fetchGsiAddressSearch(address);
+        if (Array.isArray(data) && data.length > 0) {
+          const coords = data[0]?.geometry?.coordinates;
+          if (Array.isArray(coords) && coords.length >= 2) {
+            row['経度'] = coords[0];
+            row['緯度'] = coords[1];
           } else {
             row['緯度'] = '';
             row['経度'] = '';
@@ -2810,7 +2822,6 @@ export default function App() {
         } else {
           row['緯度'] = '';
           row['経度'] = '';
-          errors.push(`${address}: ${res.status}`);
         }
       } catch (error) {
         row['緯度'] = '';
