@@ -3486,10 +3486,41 @@ export default function App() {
                 stats?.count ? stats.commentTotal / stats.count : null;
               const averageBookmarks =
                 stats?.count ? stats.bookmarkTotal / stats.count : null;
+              const lineLabel = stationPos.lineId
+                ? `(${stationPos.lineId})`
+                : '';
               const topCategoryRows = Array.from({ length: 5 }, (_, index) => {
                 const item = topCategories[index];
                 return item ? `・${item.name} (${item.count})` : '・—';
               });
+              const popupText = [
+                `乗降客数: ${formatNumber(ridership ?? 0)}`,
+                `飲食店数: ${formatNumber(stats?.count ?? 0)}`,
+                `平均評価: ${formatDecimal(stats?.avgRating ?? null)}`,
+                `コメント合計: ${formatNumber(stats?.commentTotal ?? 0)}`,
+                `（一店舗あたり平均：${formatDecimal(
+                  averageComments ?? null
+                )}）`,
+                `ブックマーク合計: ${formatNumber(stats?.bookmarkTotal ?? 0)}`,
+                `（一店舗あたり平均：${formatDecimal(
+                  averageBookmarks ?? null
+                )}）`,
+                `平均昼予算: ${
+                  stats?.avgLunchBudget !== null &&
+                  stats?.avgLunchBudget !== undefined
+                    ? `￥${formatDecimal(stats.avgLunchBudget)}`
+                    : '—'
+                }`,
+                `平均夜予算: ${
+                  stats?.avgNightBudget !== null &&
+                  stats?.avgNightBudget !== undefined
+                    ? `￥${formatDecimal(stats.avgNightBudget)}`
+                    : '—'
+                }`,
+                '',
+                '頻出カテゴリ上位5:',
+                ...topCategoryRows,
+              ].join('\n');
               return (
                 <div
                   key={`indicator-${id}`}
@@ -3528,7 +3559,10 @@ export default function App() {
                       });
                     }}
                   >
-                    <span>駅情報</span>
+                    <span>
+                      {stationPos.name}
+                      {lineLabel}
+                    </span>
                     <button
                       type="button"
                       style={{
@@ -3548,48 +3582,8 @@ export default function App() {
                       ×
                     </button>
                   </div>
-                  <div style={{ padding: '8px 10px' }}>
-                    <div style={{ fontWeight: 700 }}>
-                      {stationPos.name}
-                      {stationPos.lineId ? `(${stationPos.lineId})` : ''}
-                    </div>
-                    <div>乗降客数: {formatNumber(ridership ?? 0)}</div>
-                    <div>飲食店数: {formatNumber(stats?.count ?? 0)}</div>
-                    <div>
-                      平均評価: {formatDecimal(stats?.avgRating ?? null)}
-                    </div>
-                    <div>
-                      コメント合計: {formatNumber(stats?.commentTotal ?? 0)}
-                    </div>
-                    <div>
-                      （一店舗あたり平均：
-                      {formatDecimal(averageComments ?? null)}）
-                    </div>
-                    <div>
-                      ブックマーク合計: {formatNumber(stats?.bookmarkTotal ?? 0)}
-                    </div>
-                    <div>
-                      （一店舗あたり平均：
-                      {formatDecimal(averageBookmarks ?? null)}）
-                    </div>
-                    <div>
-                      平均昼予算:{' '}
-                      {stats?.avgLunchBudget !== null &&
-                      stats?.avgLunchBudget !== undefined
-                        ? `￥${formatDecimal(stats.avgLunchBudget)}`
-                        : '—'}
-                    </div>
-                    <div>
-                      平均夜予算:{' '}
-                      {stats?.avgNightBudget !== null &&
-                      stats?.avgNightBudget !== undefined
-                        ? `￥${formatDecimal(stats.avgNightBudget)}`
-                        : '—'}
-                    </div>
-                    <div style={{ marginTop: 6 }}>頻出カテゴリ上位5:</div>
-                    {topCategoryRows.map((row, index) => (
-                      <div key={`${id}-top-category-${index}`}>{row}</div>
-                    ))}
+                  <div style={{ padding: '8px 10px', whiteSpace: 'pre-line' }}>
+                    {popupText}
                   </div>
                 </div>
               );
