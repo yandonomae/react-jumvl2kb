@@ -47,6 +47,103 @@ const RESTAURANT_MARKER_COLORS = [
   { value: 'blue', label: '青', color: '#1e88e5' },
 ];
 
+const buildRestaurantClusters = (
+  points,
+  baseRadius,
+  zoomScale,
+  overlapThreshold = 0
+) => {
+  if (!points.length) return [];
+  const safeZoom = Number.isFinite(zoomScale) && zoomScale !== 0 ? zoomScale : 1;
+  const baseRadiusMap = baseRadius / safeZoom;
+  const overlapRatio = Math.max(0, overlapThreshold);
+  let clusters = points.map((p) => ({
+    sumX: p.x,
+    sumY: p.y,
+    count: 1,
+    point: p,
+  }));
+  let merged = true;
+
+  while (merged) {
+    merged = false;
+    const clusterCount = clusters.length;
+    if (clusterCount <= 1) break;
+
+    const parents = Array.from({ length: clusterCount }, (_, i) => i);
+    const findRoot = (idx) => {
+      let current = idx;
+      while (parents[current] !== current) {
+        parents[current] = parents[parents[current]];
+        current = parents[current];
+      }
+      return current;
+    };
+    const unionRoot = (a, b) => {
+      const rootA = findRoot(a);
+      const rootB = findRoot(b);
+      if (rootA !== rootB) {
+        parents[rootB] = rootA;
+      }
+    };
+
+    for (let i = 0; i < clusterCount; i += 1) {
+      const clusterA = clusters[i];
+      const centerAX = clusterA.sumX / clusterA.count;
+      const centerAY = clusterA.sumY / clusterA.count;
+      const radiusA = baseRadiusMap * (1 + 0.1 * clusterA.count);
+      for (let j = i + 1; j < clusterCount; j += 1) {
+        const clusterB = clusters[j];
+        const centerBX = clusterB.sumX / clusterB.count;
+        const centerBY = clusterB.sumY / clusterB.count;
+        const distance = Math.hypot(centerAX - centerBX, centerAY - centerBY);
+        const radiusB = baseRadiusMap * (1 + 0.1 * clusterB.count);
+        const maxRadius = Math.max(radiusA, radiusB);
+        const minRadius = Math.min(radiusA, radiusB);
+        if (
+          distance <= maxRadius &&
+          maxRadius - distance >= minRadius * overlapRatio
+        ) {
+          unionRoot(i, j);
+        }
+      }
+    }
+
+    const nextMap = new Map();
+    for (let i = 0; i < clusterCount; i += 1) {
+      const root = findRoot(i);
+      const cluster = clusters[i];
+      if (!nextMap.has(root)) {
+        nextMap.set(root, {
+          sumX: cluster.sumX,
+          sumY: cluster.sumY,
+          count: cluster.count,
+          point: cluster.count === 1 ? cluster.point : null,
+        });
+      } else {
+        const current = nextMap.get(root);
+        current.sumX += cluster.sumX;
+        current.sumY += cluster.sumY;
+        current.count += cluster.count;
+        current.point = null;
+      }
+    }
+
+    if (nextMap.size < clusterCount) {
+      merged = true;
+    }
+    clusters = Array.from(nextMap.values());
+  }
+
+  return clusters.map((cluster, index) => ({
+    id: cluster.point?.id || `restaurant-cluster-${index}-${cluster.count}`,
+    x: cluster.sumX / cluster.count,
+    y: cluster.sumY / cluster.count,
+    count: cluster.count,
+    point: cluster.count === 1 ? cluster.point : null,
+  }));
+};
+
 // 路線データ（[lon, lat]）
 const RAIL_LINES = [
   {
@@ -1506,6 +1603,11 @@ export default function App() {
   const [railWidth, setRailWidth] = useState(2.4); // ★追加：線幅
   const [stationRadius, setStationRadius] = useState(5);
   const [restaurantRadius, setRestaurantRadius] = useState(4);
+  const [restaurantRadiusDraft, setRestaurantRadiusDraft] = useState(4);
+  const [restaurantOverlapThreshold, setRestaurantOverlapThreshold] =
+    useState(0);
+  const [restaurantOverlapThresholdDraft, setRestaurantOverlapThresholdDraft] =
+    useState(0);
   const [showStationCatchment, setShowStationCatchment] = useState(false);
   const [boldCityBoundary, setBoldCityBoundary] = useState(false);
   const [showBaseMapLayer, setShowBaseMapLayer] = useState(true);
@@ -2469,6 +2571,17 @@ export default function App() {
     categorySel,
   ]);
 
+  const restaurantClusters = useMemo(
+    () =>
+      buildRestaurantClusters(
+        restaurantPoints,
+        restaurantRadius,
+        transform.k,
+        restaurantOverlapThreshold / 100
+      ),
+    [restaurantPoints, restaurantRadius, transform.k, restaurantOverlapThreshold]
+  );
+
   const restaurantGeoPoints = useMemo(() => {
     if (!restaurantRows?.length) return [];
     const points = [];
@@ -3062,44 +3175,79 @@ export default function App() {
                   ))
                 : null}
 
-              {mode === 'restaurant' && restaurantPoints.length ? (
+              {mode === 'restaurant' && restaurantClusters.length ? (
                 <g>
-                  {restaurantPoints.map((p) => (
-                    <circle
-                      key={p.id}
-                      cx={p.x}
-                      cy={p.y}
-                      r={restaurantRadius / transform.k}
-                      fill={
-                        RESTAURANT_MARKER_COLORS.find(
-                          (opt) => opt.value === restaurantMarkerColor
-                        )?.color || '#e53935'
-                      }
-                      fillOpacity={0.7}
-                      stroke="rgba(0,0,0,0.35)"
-                      strokeWidth={0.6 / transform.k}
-                      onMouseEnter={(e) => {
-                        setHover({
-                          visible: true,
-                          x: e.clientX,
-                          y: e.clientY,
-                          title: p.name,
-                          lines: [
-                            p.category ? `カテゴリ: ${p.category}` : null,
-                            p.rating ? `評価: ${p.rating}` : null,
-                            p.comments ? `コメント数: ${p.comments}` : null,
-                            p.bookmarks ? `ブックマーク: ${p.bookmarks}` : null,
-                            p.budgetNight ? `夜予算: ${p.budgetNight}` : null,
-                            p.budgetLunch ? `昼予算: ${p.budgetLunch}` : null,
-                            p.address ? `住所: ${p.address}` : null,
-                            p.hint ? `位置推定: ${p.hint}` : null,
-                          ].filter(Boolean),
-                        });
-                      }}
-                      onMouseMove={onFeatureMove}
-                      onMouseLeave={onFeatureLeave}
-                    />
-                  ))}
+                  {restaurantClusters.map((cluster, index) => {
+                    const radius =
+                      (restaurantRadius / transform.k) *
+                      (1 + 0.1 * cluster.count);
+                    const color =
+                      RESTAURANT_MARKER_COLORS.find(
+                        (opt) => opt.value === restaurantMarkerColor
+                      )?.color || '#e53935';
+                    return (
+                      <g key={cluster.id || `cluster-${index}`}>
+                        <circle
+                          cx={cluster.x}
+                          cy={cluster.y}
+                          r={radius}
+                          fill={color}
+                          fillOpacity={0.7}
+                          stroke="rgba(0,0,0,0.35)"
+                          strokeWidth={0.6 / transform.k}
+                          onMouseEnter={(e) => {
+                            if (cluster.point) {
+                              const p = cluster.point;
+                              setHover({
+                                visible: true,
+                                x: e.clientX,
+                                y: e.clientY,
+                                title: p.name,
+                                lines: [
+                                  p.category ? `カテゴリ: ${p.category}` : null,
+                                  p.rating ? `評価: ${p.rating}` : null,
+                                  p.comments ? `コメント数: ${p.comments}` : null,
+                                  p.bookmarks
+                                    ? `ブックマーク: ${p.bookmarks}`
+                                    : null,
+                                  p.budgetNight ? `夜予算: ${p.budgetNight}` : null,
+                                  p.budgetLunch ? `昼予算: ${p.budgetLunch}` : null,
+                                  p.address ? `住所: ${p.address}` : null,
+                                  p.hint ? `位置推定: ${p.hint}` : null,
+                                ].filter(Boolean),
+                              });
+                            } else {
+                              setHover({
+                                visible: true,
+                                x: e.clientX,
+                                y: e.clientY,
+                                title: '重なり',
+                                lines: [
+                                  `飲食店数: ${formatNumber(cluster.count)}`,
+                                ],
+                              });
+                            }
+                          }}
+                          onMouseMove={onFeatureMove}
+                          onMouseLeave={onFeatureLeave}
+                        />
+                        {cluster.count > 1 ? (
+                          <text
+                            x={cluster.x}
+                            y={cluster.y}
+                            textAnchor="middle"
+                            dominantBaseline="central"
+                            fill="#fff"
+                            fontSize={12 / transform.k}
+                            fontWeight={700}
+                            style={{ pointerEvents: 'none' }}
+                          >
+                            {cluster.count}
+                          </text>
+                        ) : null}
+                      </g>
+                    );
+                  })}
                 </g>
               ) : null}
 
@@ -4155,14 +4303,84 @@ export default function App() {
                           min={2}
                           max={10}
                           step={1}
-                          value={restaurantRadius}
+                          value={restaurantRadiusDraft}
                           onChange={(e) =>
-                            setRestaurantRadius(Number(e.target.value))
+                            setRestaurantRadiusDraft(Number(e.target.value))
                           }
                           style={{ width: '100%' }}
                         />
-                        <div style={{ fontSize: 12, opacity: 0.8, marginTop: 4 }}>
-                          現在: {restaurantRadius}px
+                        <div
+                          style={{
+                            marginTop: 8,
+                            display: 'flex',
+                            gap: 8,
+                            alignItems: 'center',
+                          }}
+                        >
+                          <button
+                            type="button"
+                            style={btnStyle}
+                            onClick={() => setRestaurantRadius(restaurantRadiusDraft)}
+                            disabled={restaurantRadiusDraft === restaurantRadius}
+                          >
+                            更新
+                          </button>
+                          <div style={{ fontSize: 12, opacity: 0.8 }}>
+                            現在: {restaurantRadius}px / 指定: {restaurantRadiusDraft}
+                            px
+                          </div>
+                        </div>
+                      </div>
+                      <div style={{ marginTop: 12 }}>
+                        <div
+                          style={{
+                            fontSize: 12,
+                            fontWeight: 700,
+                            marginBottom: 6,
+                          }}
+                        >
+                          重なり判定のしきい値
+                        </div>
+                        <input
+                          type="range"
+                          min={0}
+                          max={100}
+                          step={5}
+                          value={restaurantOverlapThresholdDraft}
+                          onChange={(e) =>
+                            setRestaurantOverlapThresholdDraft(
+                              Number(e.target.value)
+                            )
+                          }
+                          style={{ width: '100%' }}
+                        />
+                        <div
+                          style={{
+                            marginTop: 8,
+                            display: 'flex',
+                            gap: 8,
+                            alignItems: 'center',
+                          }}
+                        >
+                          <button
+                            type="button"
+                            style={btnStyle}
+                            onClick={() =>
+                              setRestaurantOverlapThreshold(
+                                restaurantOverlapThresholdDraft
+                              )
+                            }
+                            disabled={
+                              restaurantOverlapThresholdDraft ===
+                              restaurantOverlapThreshold
+                            }
+                          >
+                            更新
+                          </button>
+                          <div style={{ fontSize: 12, opacity: 0.8 }}>
+                            現在: {restaurantOverlapThreshold}% / 指定:{' '}
+                            {restaurantOverlapThresholdDraft}%
+                          </div>
                         </div>
                       </div>
                       <div style={{ marginTop: 10, fontSize: 12 }}>
