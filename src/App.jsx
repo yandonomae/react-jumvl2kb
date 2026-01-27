@@ -785,6 +785,17 @@ function loadCsvFromBuffer(buf) {
   return parseCsvText(text);
 }
 
+function looksLikeHtml(text) {
+  if (!text) return false;
+  const sample = text.trim().slice(0, 300).toLowerCase();
+  return sample.includes('<!doctype html') || sample.includes('<html');
+}
+
+function looksLikeRestaurantCsv(text) {
+  if (!text) return false;
+  return text.includes('店の名前') && text.includes('住所');
+}
+
 function findHeaderRowIndex(lines) {
   const maxScan = Math.min(lines.length, 60);
   for (let i = 0; i < maxScan; i++) {
@@ -856,6 +867,28 @@ function hashStringToAngle(text) {
   }
   const normalized = Math.abs(hash % 360);
   return (normalized * Math.PI) / 180;
+}
+
+const GSI_ADDRESS_ENDPOINT =
+  'https://msearch.gsi.go.jp/address-search/AddressSearch';
+const GSI_CORS_PROXY = 'https://api.allorigins.win/raw?url=';
+
+async function fetchGsiAddressSearch(address) {
+  const baseUrl = `${GSI_ADDRESS_ENDPOINT}?q=${encodeURIComponent(address)}`;
+
+  try {
+    const res = await fetch(baseUrl);
+    if (res.ok) return await res.json();
+  } catch (error) {
+    // CORSやネットワークエラー時はフォールバックを試す
+  }
+
+  const proxyUrl = `${GSI_CORS_PROXY}${encodeURIComponent(baseUrl)}`;
+  const res = await fetch(proxyUrl);
+  if (!res.ok) {
+    throw new Error(`GSI検索に失敗: ${res.status}`);
+  }
+  return res.json();
 }
 
 function offsetLatLon({ lat, lon }, distanceMeters, angleRad) {
@@ -1633,11 +1666,23 @@ export default function App() {
       };
 
       const loadRestaurantCsv = async (primaryUrl, fallbackUrl) => {
+        const fetchRestaurantBuffer = async (url) => {
+          const buf = await fetchBuffer(url);
+          const text = decodeArrayBufferSmart(buf);
+          if (looksLikeHtml(text)) {
+            throw new Error(`飲食店CSVがHTMLで返されました: ${url}`);
+          }
+          if (!looksLikeRestaurantCsv(text)) {
+            throw new Error(`飲食店CSVのヘッダーが不正です: ${url}`);
+          }
+          return buf;
+        };
+
         try {
-          return await fetchBuffer(primaryUrl);
+          return await fetchRestaurantBuffer(primaryUrl);
         } catch (primaryError) {
           if (!fallbackUrl) throw primaryError;
-          return fetchBuffer(fallbackUrl);
+          return fetchRestaurantBuffer(fallbackUrl);
         }
       };
 
@@ -2787,22 +2832,12 @@ export default function App() {
       }
 
       try {
-        const res = await fetch(
-          `https://msearch.gsi.go.jp/address-search/AddressSearch?q=${encodeURIComponent(
-            address
-          )}`
-        );
-        if (res.ok) {
-          const data = await res.json();
-          if (Array.isArray(data) && data.length > 0) {
-            const coords = data[0]?.geometry?.coordinates;
-            if (Array.isArray(coords) && coords.length >= 2) {
-              row['経度'] = coords[0];
-              row['緯度'] = coords[1];
-            } else {
-              row['緯度'] = '';
-              row['経度'] = '';
-            }
+        const data = await fetchGsiAddressSearch(address);
+        if (Array.isArray(data) && data.length > 0) {
+          const coords = data[0]?.geometry?.coordinates;
+          if (Array.isArray(coords) && coords.length >= 2) {
+            row['経度'] = coords[0];
+            row['緯度'] = coords[1];
           } else {
             row['緯度'] = '';
             row['経度'] = '';
@@ -2810,7 +2845,6 @@ export default function App() {
         } else {
           row['緯度'] = '';
           row['経度'] = '';
-          errors.push(`${address}: ${res.status}`);
         }
       } catch (error) {
         row['緯度'] = '';
