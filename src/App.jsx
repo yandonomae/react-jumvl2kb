@@ -3186,68 +3186,68 @@ export default function App() {
                         (opt) => opt.value === restaurantMarkerColor
                       )?.color || '#e53935';
                     return (
-                      <g key={cluster.id || `cluster-${index}`}>
-                        <circle
-                          cx={cluster.x}
-                          cy={cluster.y}
-                          r={radius}
-                          fill={color}
-                          fillOpacity={0.7}
-                          stroke="rgba(0,0,0,0.35)"
-                          strokeWidth={0.6 / transform.k}
-                          onMouseEnter={(e) => {
-                            if (cluster.point) {
-                              const p = cluster.point;
-                              setHover({
-                                visible: true,
-                                x: e.clientX,
-                                y: e.clientY,
-                                title: p.name,
-                                lines: [
-                                  p.category ? `カテゴリ: ${p.category}` : null,
-                                  p.rating ? `評価: ${p.rating}` : null,
-                                  p.comments ? `コメント数: ${p.comments}` : null,
-                                  p.bookmarks
-                                    ? `ブックマーク: ${p.bookmarks}`
-                                    : null,
-                                  p.budgetNight ? `夜予算: ${p.budgetNight}` : null,
-                                  p.budgetLunch ? `昼予算: ${p.budgetLunch}` : null,
-                                  p.address ? `住所: ${p.address}` : null,
-                                  p.hint ? `位置推定: ${p.hint}` : null,
-                                ].filter(Boolean),
-                              });
-                            } else {
-                              setHover({
-                                visible: true,
-                                x: e.clientX,
-                                y: e.clientY,
-                                title: '重なり',
-                                lines: [
-                                  `飲食店数: ${formatNumber(cluster.count)}`,
-                                ],
-                              });
-                            }
-                          }}
-                          onMouseMove={onFeatureMove}
-                          onMouseLeave={onFeatureLeave}
-                        />
-                        {cluster.count > 1 ? (
-                          <text
-                            x={cluster.x}
-                            y={cluster.y}
-                            textAnchor="middle"
-                            dominantBaseline="central"
-                            fill="#fff"
-                            fontSize={12 / transform.k}
-                            fontWeight={700}
-                            style={{ pointerEvents: 'none' }}
-                          >
-                            {cluster.count}
-                          </text>
-                        ) : null}
-                      </g>
+                      <circle
+                        key={cluster.id || `cluster-${index}`}
+                        cx={cluster.x}
+                        cy={cluster.y}
+                        r={radius}
+                        fill={color}
+                        fillOpacity={0.7}
+                        stroke="rgba(0,0,0,0.35)"
+                        strokeWidth={0.6 / transform.k}
+                        onMouseEnter={(e) => {
+                          if (cluster.point) {
+                            const p = cluster.point;
+                            setHover({
+                              visible: true,
+                              x: e.clientX,
+                              y: e.clientY,
+                              title: p.name,
+                              lines: [
+                                p.category ? `カテゴリ: ${p.category}` : null,
+                                p.rating ? `評価: ${p.rating}` : null,
+                                p.comments ? `コメント数: ${p.comments}` : null,
+                                p.bookmarks ? `ブックマーク: ${p.bookmarks}` : null,
+                                p.budgetNight ? `夜予算: ${p.budgetNight}` : null,
+                                p.budgetLunch ? `昼予算: ${p.budgetLunch}` : null,
+                                p.address ? `住所: ${p.address}` : null,
+                                p.hint ? `位置推定: ${p.hint}` : null,
+                              ].filter(Boolean),
+                            });
+                          } else {
+                            setHover({
+                              visible: true,
+                              x: e.clientX,
+                              y: e.clientY,
+                              title: '重なり',
+                              lines: [
+                                `飲食店数: ${formatNumber(cluster.count)}`,
+                              ],
+                            });
+                          }
+                        }}
+                        onMouseMove={onFeatureMove}
+                        onMouseLeave={onFeatureLeave}
+                      />
                     );
                   })}
+                  {restaurantClusters.map((cluster, index) =>
+                    cluster.count > 1 ? (
+                      <text
+                        key={`cluster-count-${cluster.id || index}`}
+                        x={cluster.x}
+                        y={cluster.y}
+                        textAnchor="middle"
+                        dominantBaseline="central"
+                        fill="#fff"
+                        fontSize={12 / transform.k}
+                        fontWeight={700}
+                        style={{ pointerEvents: 'none' }}
+                      >
+                        {cluster.count}
+                      </text>
+                    ) : null
+                  )}
                 </g>
               ) : null}
 
