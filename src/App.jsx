@@ -1618,6 +1618,8 @@ export default function App() {
     useState(0);
   const [restaurantOverlapThresholdDraft, setRestaurantOverlapThresholdDraft] =
     useState(0);
+  const [showRestaurantClusterCount, setShowRestaurantClusterCount] =
+    useState(true);
   const [showStationCatchment, setShowStationCatchment] = useState(false);
   const [boldCityBoundary, setBoldCityBoundary] = useState(false);
   const [showBaseMapLayer, setShowBaseMapLayer] = useState(true);
@@ -3407,7 +3409,9 @@ export default function App() {
               )}
 
               {/* Restaurant cluster labels (above all circles) */}
-              {mode === 'restaurant' && restaurantClusters.length
+              {mode === 'restaurant' &&
+              showRestaurantClusterCount &&
+              restaurantClusters.length
                 ? restaurantClusters.map((cluster, index) =>
                     cluster.count > 1 ? (
                       <text
@@ -4462,6 +4466,23 @@ export default function App() {
                           </div>
                         </div>
                       </div>
+                      <label
+                        style={{
+                          marginTop: 10,
+                          display: 'flex',
+                          gap: 10,
+                          alignItems: 'center',
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={showRestaurantClusterCount}
+                          onChange={(e) =>
+                            setShowRestaurantClusterCount(e.target.checked)
+                          }
+                        />
+                        <span>白い数字（重なり数）を表示</span>
+                      </label>
                       <div style={{ marginTop: 12 }}>
                         <div
                           style={{
