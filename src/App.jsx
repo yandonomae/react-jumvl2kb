@@ -2698,11 +2698,17 @@ export default function App() {
 
   const stationSummaryRows = useMemo(() => {
     if (!stations.length) return [];
-    const toCsvNumber = (value) => {
+    const toCsvNumber = (value, digits = null) => {
       if (value === null || value === undefined || value === '') return '';
       const num = Number(value);
       if (!Number.isFinite(num)) return '';
-      return num.toLocaleString('ja-JP', { maximumFractionDigits: 4 });
+      if (digits === null || digits === undefined) {
+        return num.toLocaleString('ja-JP', { maximumFractionDigits: 4 });
+      }
+      return num.toLocaleString('ja-JP', {
+        minimumFractionDigits: digits,
+        maximumFractionDigits: digits,
+      });
     };
     return stations.map((station) => {
       const stats = stationStats.get(station.id);
@@ -2718,8 +2724,8 @@ export default function App() {
         頻出カテゴリ5位: topCategories[4]?.name ?? '',
         コメント合計: toCsvNumber(stats?.commentTotal ?? 0),
         ブックマーク合計: toCsvNumber(stats?.bookmarkTotal ?? 0),
-        平均昼予算: toCsvNumber(stats?.avgLunchBudget ?? null),
-        平均夜予算: toCsvNumber(stats?.avgNightBudget ?? null),
+        平均昼予算: toCsvNumber(stats?.avgLunchBudget ?? null, 1),
+        平均夜予算: toCsvNumber(stats?.avgNightBudget ?? null, 1),
       };
     });
   }, [stations, stationStats]);
@@ -3064,12 +3070,13 @@ export default function App() {
 
   const handleStationRankingDownload = () => {
     if (!stations.length) return;
-    const formatValue = (value, maxFractionDigits) => {
+    const formatValue = (value, digits) => {
       if (value === null || value === undefined) return null;
       const num = Number(value);
       if (!Number.isFinite(num)) return null;
       return num.toLocaleString('ja-JP', {
-        maximumFractionDigits: maxFractionDigits,
+        minimumFractionDigits: digits,
+        maximumFractionDigits: digits,
       });
     };
     const stationValues = stations.map((station) => {
@@ -3097,14 +3104,14 @@ export default function App() {
       };
     });
 
-    const buildRanking = (label, valueKey, maxFractionDigits) => {
+    const buildRanking = (label, valueKey, digits) => {
       const sorted = stationValues
         .map((row) => ({ name: row.stationName, value: row[valueKey] }))
         .filter((row) => Number.isFinite(row.value))
         .sort((a, b) => b.value - a.value);
       const lines = [label];
       sorted.forEach((row) => {
-        const formatted = formatValue(row.value, maxFractionDigits);
+        const formatted = formatValue(row.value, digits);
         if (formatted) {
           lines.push(`${row.name}(${formatted})`);
         }
@@ -3129,17 +3136,17 @@ export default function App() {
       平均評価: buildRanking('平均評価', 'avgRating', 2),
       コメント合計: buildRanking('コメント合計', 'commentTotal', 0),
       ブックマーク合計: buildRanking('ブックマーク合計', 'bookmarkTotal', 0),
-      平均昼予算: buildRanking('平均昼予算', 'avgLunchBudget', 0),
-      平均夜予算: buildRanking('平均夜予算', 'avgNightBudget', 0),
+      平均昼予算: buildRanking('平均昼予算', 'avgLunchBudget', 1),
+      平均夜予算: buildRanking('平均夜予算', 'avgNightBudget', 1),
       一店舗店当たりコメント数: buildRanking(
         '一店舗店当たりコメント数',
         'commentsPerStore',
-        2
+        1
       ),
       一店舗あたりブクマ数: buildRanking(
         '一店舗あたりブクマ数',
         'bookmarksPerStore',
-        2
+        1
       ),
     };
     const content = buildCsvContent([row], columns);
@@ -3580,7 +3587,7 @@ export default function App() {
               const popupText = [
                 `乗降客数: ${formatNumber(ridership ?? 0)}`,
                 `飲食店数: ${formatNumber(stats?.count ?? 0)}`,
-                `平均評価: ${formatDecimal(stats?.avgRating ?? null)}`,
+                `平均評価: ${formatDecimal(stats?.avgRating ?? null, 2)}`,
                 `コメント合計: ${formatNumber(stats?.commentTotal ?? 0)}`,
                 `（一店舗あたり平均：${formatDecimal(
                   averageComments ?? null
@@ -3592,13 +3599,13 @@ export default function App() {
                 `平均昼予算: ${
                   stats?.avgLunchBudget !== null &&
                   stats?.avgLunchBudget !== undefined
-                    ? `￥${formatDecimal(stats.avgLunchBudget)}`
+                    ? `￥${formatDecimal(stats.avgLunchBudget, 1)}`
                     : '—'
                 }`,
                 `平均夜予算: ${
                   stats?.avgNightBudget !== null &&
                   stats?.avgNightBudget !== undefined
-                    ? `￥${formatDecimal(stats.avgNightBudget)}`
+                    ? `￥${formatDecimal(stats.avgNightBudget, 1)}`
                     : '—'
                 }`,
                 '',
