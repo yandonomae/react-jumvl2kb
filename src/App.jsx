@@ -3062,6 +3062,90 @@ export default function App() {
     downloadCsv(content, '駅_500m圏内_飲食店集計.csv');
   };
 
+  const handleStationRankingDownload = () => {
+    if (!stations.length) return;
+    const formatValue = (value, maxFractionDigits) => {
+      if (value === null || value === undefined) return null;
+      const num = Number(value);
+      if (!Number.isFinite(num)) return null;
+      return num.toLocaleString('ja-JP', {
+        maximumFractionDigits: maxFractionDigits,
+      });
+    };
+    const stationValues = stations.map((station) => {
+      const stats = stationStats.get(station.id);
+      const count = stats?.count ?? 0;
+      const commentTotal = stats?.commentTotal ?? 0;
+      const bookmarkTotal = stats?.bookmarkTotal ?? 0;
+      const avgRating = stats?.avgRating ?? null;
+      const avgLunchBudget = stats?.avgLunchBudget ?? null;
+      const avgNightBudget = stats?.avgNightBudget ?? null;
+      const ridership = RIDERSHIP_BY_STATION_ID[station.id] ?? null;
+      const commentsPerStore = count ? commentTotal / count : null;
+      const bookmarksPerStore = count ? bookmarkTotal / count : null;
+      return {
+        stationName: station.name,
+        ridership,
+        count,
+        avgRating,
+        commentTotal,
+        bookmarkTotal,
+        avgLunchBudget,
+        avgNightBudget,
+        commentsPerStore,
+        bookmarksPerStore,
+      };
+    });
+
+    const buildRanking = (label, valueKey, maxFractionDigits) => {
+      const sorted = stationValues
+        .map((row) => ({ name: row.stationName, value: row[valueKey] }))
+        .filter((row) => Number.isFinite(row.value))
+        .sort((a, b) => b.value - a.value);
+      const lines = [label];
+      sorted.forEach((row) => {
+        const formatted = formatValue(row.value, maxFractionDigits);
+        if (formatted) {
+          lines.push(`${row.name}(${formatted})`);
+        }
+      });
+      return lines.join('\n');
+    };
+
+    const columns = [
+      '乗降客数',
+      '500m圏内の飲食店数',
+      '平均評価',
+      'コメント合計',
+      'ブックマーク合計',
+      '平均昼予算',
+      '平均夜予算',
+      '一店舗店当たりコメント数',
+      '一店舗あたりブクマ数',
+    ];
+    const row = {
+      乗降客数: buildRanking('乗降客数', 'ridership', 0),
+      '500m圏内の飲食店数': buildRanking('500m圏内の飲食店数', 'count', 0),
+      平均評価: buildRanking('平均評価', 'avgRating', 2),
+      コメント合計: buildRanking('コメント合計', 'commentTotal', 0),
+      ブックマーク合計: buildRanking('ブックマーク合計', 'bookmarkTotal', 0),
+      平均昼予算: buildRanking('平均昼予算', 'avgLunchBudget', 0),
+      平均夜予算: buildRanking('平均夜予算', 'avgNightBudget', 0),
+      一店舗店当たりコメント数: buildRanking(
+        '一店舗店当たりコメント数',
+        'commentsPerStore',
+        2
+      ),
+      一店舗あたりブクマ数: buildRanking(
+        '一店舗あたりブクマ数',
+        'bookmarksPerStore',
+        2
+      ),
+    };
+    const content = buildCsvContent([row], columns);
+    downloadCsv(content, '駅_全駅ランキング.csv');
+  };
+
   return (
     <div
       style={{
@@ -4442,6 +4526,23 @@ export default function App() {
                         >
                           {showStationCatchment
                             ? '駅500m圏内の飲食店集計をCSVで出力します。'
+                            : '駅500m圏を表示中にダウンロードできます。'}
+                        </div>
+                        <button
+                          type="button"
+                          style={{ ...btnStyle, marginTop: 8 }}
+                          onClick={handleStationRankingDownload}
+                          disabled={
+                            !showStationCatchment || !stationSummaryRows.length
+                          }
+                        >
+                          全駅ランキングをダウンロード
+                        </button>
+                        <div
+                          style={{ marginTop: 6, fontSize: 12, opacity: 0.8 }}
+                        >
+                          {showStationCatchment
+                            ? '駅500m圏内の各指標ランキングをCSVで出力します。'
                             : '駅500m圏を表示中にダウンロードできます。'}
                         </div>
                       </div>
