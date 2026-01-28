@@ -22,11 +22,15 @@ import { mesh } from 'topojson-client';
  * - 鉄道路線オーバーレイ（指定色） + 駅マーカー（サイズ調整） + 線幅調整
  */
 
-// 画像から抽出した近似色（ユーザー指定の「1枚目/2枚目/3枚目の画像の色」）
+// 添付画像の路線名に合わせた色（モノレールは共通色）
 const LINE_COLORS = {
-  JR: '#0075BF', // rgb(0,117,191)
-  MONORAIL: '#0053A5', // rgb(0,83,165)
-  HANKYU: '#0EA641', // rgb(14,166,65)
+  MONORAIL: '#1c7a9a', // 大阪モノレール（彩都線/本線）
+  OSAKA_HIGASHI: '#1c4a5b', // おおさか東線
+  HANKYU_KYOTO: '#0b5ed7', // 阪急京都線
+  JR_KYOTO: '#12a54b', // JR京都線
+  HANKYU_SENRI: '#5cbf6a', // 阪急千里線
+  HANKYU_TAKARAZUKA: '#f08a2c', // 阪急宝塚本線
+  KITA_OSAKA: '#e03a2b', // 北大阪急行
 };
 
 const BASE_MAP_STYLES = [
@@ -256,7 +260,7 @@ const RAIL_LINES = [
   },
   {
     id: '阪急京都線',
-    color: LINE_COLORS.HANKYU,
+    color: LINE_COLORS.HANKYU_KYOTO,
     stations: [
       {
         id: 'hk_摂津市',
@@ -292,7 +296,7 @@ const RAIL_LINES = [
   },
   {
     id: 'JR京都線',
-    color: LINE_COLORS.JR,
+    color: LINE_COLORS.JR_KYOTO,
     stations: [
       {
         id: 'jr_東淀川',
@@ -340,7 +344,7 @@ const RAIL_LINES = [
   },
   {
     id: 'おおさか東線',
-    color: LINE_COLORS.JR,
+    color: LINE_COLORS.OSAKA_HIGASHI,
     stations: [
       {
         id: 'os_東淀川',
@@ -364,7 +368,7 @@ const RAIL_LINES = [
   },
   {
     id: '阪急千里線',
-    color: LINE_COLORS.HANKYU,
+    color: LINE_COLORS.HANKYU_SENRI,
     stations: [
       {
         id: 'hs_下新庄',
@@ -418,7 +422,7 @@ const RAIL_LINES = [
   },
   {
     id: '阪急宝塚本線',
-    color: LINE_COLORS.HANKYU,
+    color: LINE_COLORS.HANKYU_TAKARAZUKA,
     stations: [
       {
         id: 'ht_石橋阪大前',
@@ -472,7 +476,7 @@ const RAIL_LINES = [
   },
   {
     id: '北大阪急行',
-    color: LINE_COLORS.JR,
+    color: LINE_COLORS.KITA_OSAKA,
     stations: [
       {
         id: 'nk_東三国',
@@ -1648,6 +1652,8 @@ export default function App() {
   // 駅インジケーター
   const [stationIndicators, setStationIndicators] = useState({});
   const [draggingIndicator, setDraggingIndicator] = useState(null);
+  const [lineLabelOffsets, setLineLabelOffsets] = useState({});
+  const [draggingLineLabel, setDraggingLineLabel] = useState(null);
 
   // 乗降客数インジケーター
   const [ridershipIconSize, setRidershipIconSize] = useState(
@@ -2166,6 +2172,35 @@ export default function App() {
     };
   }, [draggingRidershipIndicator]);
 
+  useEffect(() => {
+    if (!draggingLineLabel) return undefined;
+    const handleMove = (e) => {
+      setLineLabelOffsets((prev) => {
+        const current = prev[draggingLineLabel.id] || {
+          offsetX: 12,
+          offsetY: -12,
+        };
+        const dx = e.clientX - draggingLineLabel.startX;
+        const dy = e.clientY - draggingLineLabel.startY;
+        return {
+          ...prev,
+          [draggingLineLabel.id]: {
+            ...current,
+            offsetX: draggingLineLabel.originX + dx,
+            offsetY: draggingLineLabel.originY + dy,
+          },
+        };
+      });
+    };
+    const handleUp = () => setDraggingLineLabel(null);
+    window.addEventListener('mousemove', handleMove);
+    window.addEventListener('mouseup', handleUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMove);
+      window.removeEventListener('mouseup', handleUp);
+    };
+  }, [draggingLineLabel]);
+
   const zoomIn = () => {
     if (!svgRef.current || !zoomRef.current) return;
     select(svgRef.current).call(zoomRef.current.scaleBy, 1.25);
@@ -2425,6 +2460,16 @@ export default function App() {
       .filter(Boolean);
   }, [stations, projection]);
 
+  const stationLabelPoints = useMemo(() => {
+    const seen = new Set();
+    return stationPoints.filter((s) => {
+      if (s.name === '千里中央' && s.lineId !== '北大阪急行') return false;
+      if (seen.has(s.name)) return false;
+      seen.add(s.name);
+      return true;
+    });
+  }, [stationPoints]);
+
   const stationCatchmentCircles = useMemo(() => {
     if (!projection) return [];
     return stations
@@ -2452,6 +2497,34 @@ export default function App() {
         screenY: s.y * transform.k + transform.y,
       })),
     [stationPoints, transform]
+  );
+
+  const lineLabelAnchors = useMemo(() => {
+    if (!projection) return [];
+    return RAIL_LINES.map((line) => {
+      const index = Math.floor(line.stations.length / 2);
+      const station = line.stations[index] || line.stations[0];
+      if (!station) return null;
+      const pt = projection([station.lon, station.lat]);
+      if (!pt) return null;
+      return {
+        id: line.id,
+        name: line.id,
+        color: line.color,
+        x: pt[0],
+        y: pt[1],
+      };
+    }).filter(Boolean);
+  }, [projection]);
+
+  const lineLabelScreenPoints = useMemo(
+    () =>
+      lineLabelAnchors.map((line) => ({
+        ...line,
+        screenX: line.x * transform.k + transform.x,
+        screenY: line.y * transform.k + transform.y,
+      })),
+    [lineLabelAnchors, transform]
   );
 
   const stationScreenLookup = useMemo(
@@ -3433,21 +3506,37 @@ export default function App() {
 
               {/* Station labels (topmost) */}
               {showRail && mode !== 'ridership'
-                ? stationPoints.map((s) => (
-                    <text
-                      key={`station-label-${s.id}`}
-                      x={s.x}
-                      y={s.y - (stationRadius + 4) / transform.k}
-                      fontSize={12 / transform.k}
-                      textAnchor="middle"
-                      fill="#111"
-                      stroke="#fff"
-                      strokeWidth={3 / transform.k}
-                      paintOrder="stroke"
-                    >
-                      {s.name}
-                    </text>
-                  ))
+                ? stationLabelPoints.map((s) => {
+                    const fontSize = 12 / transform.k;
+                    const paddingX = 4 / transform.k;
+                    const paddingY = 2 / transform.k;
+                    const labelWidth =
+                      s.name.length * fontSize * 0.6 + paddingX * 2;
+                    const labelHeight = fontSize + paddingY * 2;
+                    const labelCenterY =
+                      s.y - (stationRadius + 4) / transform.k;
+                    return (
+                      <g key={`station-label-${s.id}`} style={{ pointerEvents: 'none' }}>
+                        <rect
+                          x={s.x - labelWidth / 2}
+                          y={labelCenterY - labelHeight / 2}
+                          width={labelWidth}
+                          height={labelHeight}
+                          fill="rgba(255,255,255,0.85)"
+                        />
+                        <text
+                          x={s.x}
+                          y={labelCenterY}
+                          fontSize={fontSize}
+                          textAnchor="middle"
+                          dominantBaseline="middle"
+                          fill="#111"
+                        >
+                          {s.name}
+                        </text>
+                      </g>
+                    );
+                  })
                 : null}
             </g>
           )}
@@ -3553,6 +3642,61 @@ export default function App() {
                       <div style={{ opacity: 0.6 }}>データなし</div>
                     )}
                   </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : null}
+
+        {showRail && lineLabelScreenPoints.length ? (
+          <div
+            style={{
+              position: 'absolute',
+              left: 0,
+              top: 0,
+              width: '100%',
+              height: '100%',
+              pointerEvents: 'none',
+            }}
+          >
+            {lineLabelScreenPoints.map((line) => {
+              const offset = lineLabelOffsets[line.id] || {
+                offsetX: 12,
+                offsetY: -12,
+              };
+              return (
+                <div
+                  key={`line-label-${line.id}`}
+                  style={{
+                    position: 'absolute',
+                    left: line.screenX + offset.offsetX,
+                    top: line.screenY + offset.offsetY,
+                    transform: 'translate(-50%, -50%)',
+                    background: 'rgba(255,255,255,0.88)',
+                    borderRadius: 999,
+                    padding: '4px 10px',
+                    border: `1px solid ${line.color}`,
+                    fontSize: 12,
+                    fontWeight: 700,
+                    color: '#111',
+                    whiteSpace: 'nowrap',
+                    boxShadow: '0 6px 14px rgba(0,0,0,0.12)',
+                    cursor: 'move',
+                    pointerEvents: 'auto',
+                  }}
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setDraggingLineLabel({
+                      id: line.id,
+                      startX: e.clientX,
+                      startY: e.clientY,
+                      originX: offset.offsetX,
+                      originY: offset.offsetY,
+                    });
+                  }}
+                >
+                  {line.name}
                 </div>
               );
             })}
@@ -4808,6 +4952,45 @@ export default function App() {
             </div>
           )}
         </div>
+
+        {showRail && (
+          <div
+            style={{
+              position: 'absolute',
+              right: 16,
+              top: 16,
+              background: 'rgba(255,255,255,0.92)',
+              border: '1px solid rgba(0,0,0,0.08)',
+              borderRadius: 12,
+              padding: 12,
+              boxShadow: '0 8px 24px rgba(0,0,0,0.1)',
+              minWidth: 200,
+            }}
+          >
+            <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8 }}>
+              路線の凡例
+            </div>
+            <div style={{ display: 'grid', gap: 6 }}>
+              {RAIL_LINES.map((line) => (
+                <div
+                  key={`rail-legend-${line.id}`}
+                  style={{ display: 'flex', alignItems: 'center', gap: 8 }}
+                >
+                  <span
+                    style={{
+                      width: 18,
+                      height: 6,
+                      borderRadius: 999,
+                      background: line.color,
+                      display: 'inline-block',
+                    }}
+                  />
+                  <span style={{ fontSize: 12 }}>{line.id}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Legend */}
         {displayShapeGeo && mode !== 'restaurant' && mode !== 'ridership' && (
