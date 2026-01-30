@@ -66,6 +66,7 @@ const buildRestaurantClusters = (
     sumY: p.y,
     count: 1,
     point: p,
+    points: [p],
   }));
   let merged = true;
 
@@ -123,6 +124,7 @@ const buildRestaurantClusters = (
           sumY: cluster.sumY,
           count: cluster.count,
           point: cluster.count === 1 ? cluster.point : null,
+          points: [...cluster.points],
         });
       } else {
         const current = nextMap.get(root);
@@ -130,6 +132,7 @@ const buildRestaurantClusters = (
         current.sumY += cluster.sumY;
         current.count += cluster.count;
         current.point = null;
+        current.points.push(...cluster.points);
       }
     }
 
@@ -140,11 +143,13 @@ const buildRestaurantClusters = (
   }
 
   return clusters.map((cluster, index) => ({
-    id: cluster.point?.id || `restaurant-cluster-${index}-${cluster.count}`,
+    id:
+      cluster.points?.[0]?.id || `restaurant-cluster-${index}-${cluster.count}`,
     x: cluster.sumX / cluster.count,
     y: cluster.sumY / cluster.count,
     count: cluster.count,
-    point: cluster.count === 1 ? cluster.point : null,
+    point: cluster.count === 1 ? cluster.points?.[0] ?? cluster.point : null,
+    points: cluster.points ?? (cluster.point ? [cluster.point] : []),
   }));
 };
 
@@ -1629,6 +1634,7 @@ export default function App() {
   const [showBaseMapLayer, setShowBaseMapLayer] = useState(true);
   const [baseMapStyle, setBaseMapStyle] = useState('osm');
   const [scaleScope, setScaleScope] = useState('visible'); // visible | all
+  const [restaurantClusterIndex, setRestaurantClusterIndex] = useState({});
 
   // 人口
   const [sexSel, setSexSel] = useState({ 男: true, 女: true, 総数: false });
@@ -2425,6 +2431,27 @@ export default function App() {
     setHover((h) => ({ ...h, visible: false }));
   };
 
+  const getRestaurantClusterPoint = (cluster, index = 0) => {
+    if (!cluster?.points?.length) return null;
+    const safeIndex = index % cluster.points.length;
+    return cluster.points[safeIndex];
+  };
+
+  const buildRestaurantHover = (point, count = 1) => ({
+    title: point?.name || '店舗情報',
+    lines: [
+      count > 1 ? `飲食店数: ${formatNumber(count)}` : null,
+      point?.category ? `カテゴリ: ${point.category}` : null,
+      point?.rating ? `評価: ${point.rating}` : null,
+      point?.comments ? `コメント数: ${point.comments}` : null,
+      point?.bookmarks ? `ブックマーク: ${point.bookmarks}` : null,
+      point?.budgetNight ? `夜予算: ${point.budgetNight}` : null,
+      point?.budgetLunch ? `昼予算: ${point.budgetLunch}` : null,
+      point?.address ? `住所: ${point.address}` : null,
+      point?.hint ? `位置推定: ${point.hint}` : null,
+    ].filter(Boolean),
+  });
+
   const railPaths = useMemo(() => {
     if (!pathGen) return [];
     const features = railGeo.features || [];
@@ -2666,6 +2693,18 @@ export default function App() {
       ),
     [restaurantPoints, restaurantRadius, transform.k, restaurantOverlapThreshold]
   );
+
+  useEffect(() => {
+    setRestaurantClusterIndex((prev) => {
+      const next = {};
+      for (const cluster of restaurantClusters) {
+        if (cluster.count <= 1) continue;
+        const currentIndex = prev[cluster.id] ?? 0;
+        next[cluster.id] = currentIndex % cluster.count;
+      }
+      return next;
+    });
+  }, [restaurantClusters]);
 
   const restaurantGeoPoints = useMemo(() => {
     if (!restaurantRows?.length) return [];
@@ -3381,37 +3420,58 @@ export default function App() {
                         strokeWidth={0.6 / transform.k}
                         onMouseEnter={(e) => {
                           if (cluster.point) {
-                            const p = cluster.point;
                             setHover({
                               visible: true,
                               x: e.clientX,
                               y: e.clientY,
-                              title: p.name,
-                              lines: [
-                                p.category ? `カテゴリ: ${p.category}` : null,
-                                p.rating ? `評価: ${p.rating}` : null,
-                                p.comments ? `コメント数: ${p.comments}` : null,
-                                p.bookmarks ? `ブックマーク: ${p.bookmarks}` : null,
-                                p.budgetNight ? `夜予算: ${p.budgetNight}` : null,
-                                p.budgetLunch ? `昼予算: ${p.budgetLunch}` : null,
-                                p.address ? `住所: ${p.address}` : null,
-                                p.hint ? `位置推定: ${p.hint}` : null,
-                              ].filter(Boolean),
+                              ...buildRestaurantHover(cluster.point, 1),
                             });
                           } else {
+                            const index = restaurantClusterIndex[cluster.id] ?? 0;
+                            const point = getRestaurantClusterPoint(
+                              cluster,
+                              index
+                            );
                             setHover({
                               visible: true,
                               x: e.clientX,
                               y: e.clientY,
-                              title: '重なり',
-                              lines: [
-                                `飲食店数: ${formatNumber(cluster.count)}`,
-                              ],
+                              ...(point
+                                ? buildRestaurantHover(point, cluster.count)
+                                : {
+                                    title: '重なり',
+                                    lines: [
+                                      `飲食店数: ${formatNumber(cluster.count)}`,
+                                    ],
+                                  }),
                             });
                           }
                         }}
                         onMouseMove={onFeatureMove}
                         onMouseLeave={onFeatureLeave}
+                        onClick={(e) => {
+                          if (cluster.count <= 1) return;
+                          e.stopPropagation();
+                          const nextIndex =
+                            (restaurantClusterIndex[cluster.id] ?? 0) + 1;
+                          const normalizedIndex = nextIndex % cluster.count;
+                          setRestaurantClusterIndex((prev) => ({
+                            ...prev,
+                            [cluster.id]: normalizedIndex,
+                          }));
+                          const point = getRestaurantClusterPoint(
+                            cluster,
+                            normalizedIndex
+                          );
+                          if (point) {
+                            setHover({
+                              visible: true,
+                              x: e.clientX,
+                              y: e.clientY,
+                              ...buildRestaurantHover(point, cluster.count),
+                            });
+                          }
+                        }}
                       />
                     );
                   })}
