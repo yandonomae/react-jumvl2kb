@@ -1618,7 +1618,9 @@ export default function App() {
 
   // UI状態
   const [panelOpen, setPanelOpen] = useState(true);
-  const [showRail, setShowRail] = useState(true);
+  const [showRailLines, setShowRailLines] = useState(true);
+  const [showStations, setShowStations] = useState(true);
+  const [showStationLabels, setShowStationLabels] = useState(true);
   const [railWidth, setRailWidth] = useState(2.4); // ★追加：線幅
   const [stationRadius, setStationRadius] = useState(5);
   const [restaurantRadius, setRestaurantRadius] = useState(4);
@@ -1629,7 +1631,6 @@ export default function App() {
     useState(0);
   const [showRestaurantClusterCount, setShowRestaurantClusterCount] =
     useState(true);
-  const [showStationCatchment, setShowStationCatchment] = useState(false);
   const [boldCityBoundary, setBoldCityBoundary] = useState(false);
   const [showBaseMapLayer, setShowBaseMapLayer] = useState(true);
   const [baseMapStyle, setBaseMapStyle] = useState('osm');
@@ -1656,7 +1657,7 @@ export default function App() {
   const [restaurantMarkerColor, setRestaurantMarkerColor] = useState('red');
 
   // 駅インジケーター
-  const [stationIndicators, setStationIndicators] = useState({});
+  const [stationCatchmentState, setStationCatchmentState] = useState({});
   const [draggingIndicator, setDraggingIndicator] = useState(null);
   const [lineLabelOffsets, setLineLabelOffsets] = useState({});
   const [draggingLineLabel, setDraggingLineLabel] = useState(null);
@@ -2125,7 +2126,7 @@ export default function App() {
   useEffect(() => {
     if (!draggingIndicator) return undefined;
     const handleMove = (e) => {
-      setStationIndicators((prev) => {
+      setStationCatchmentState((prev) => {
         const current = prev[draggingIndicator.id];
         if (!current) return prev;
         const dx = e.clientX - draggingIndicator.startX;
@@ -2515,6 +2516,21 @@ export default function App() {
       })
       .filter(Boolean);
   }, [stations, projection]);
+
+  const visibleStationCatchmentCircles = useMemo(
+    () =>
+      stationCatchmentCircles.filter(
+        (circle) => (stationCatchmentState[circle.id]?.stage ?? 0) >= 1
+      ),
+    [stationCatchmentCircles, stationCatchmentState]
+  );
+
+  const areAllCatchmentsVisible = useMemo(() => {
+    if (!stations.length) return false;
+    return stations.every(
+      (station) => (stationCatchmentState[station.id]?.stage ?? 0) >= 1
+    );
+  }, [stations, stationCatchmentState]);
 
   const stationScreenPoints = useMemo(
     () =>
@@ -3267,6 +3283,51 @@ export default function App() {
     downloadCsv(content, '駅_全駅ランキング.csv');
   };
 
+  const toggleStationCatchment = (stationId) => {
+    setStationCatchmentState((prev) => {
+      const current = prev[stationId];
+      const currentStage = current?.stage ?? 0;
+      const nextStage = currentStage === 0 ? 1 : currentStage === 1 ? 2 : 0;
+      const base = current || { offsetX: 18, offsetY: -18, stage: 0 };
+      return {
+        ...prev,
+        [stationId]: {
+          ...base,
+          stage: nextStage,
+        },
+      };
+    });
+  };
+
+  const toggleAllCatchments = () => {
+    setStationCatchmentState((prev) => {
+      const next = { ...prev };
+      if (areAllCatchmentsVisible) {
+        stations.forEach((station) => {
+          const current = next[station.id] || {
+            offsetX: 18,
+            offsetY: -18,
+            stage: 0,
+          };
+          next[station.id] = { ...current, stage: 0 };
+        });
+        return next;
+      }
+      stations.forEach((station) => {
+        const current = next[station.id] || {
+          offsetX: 18,
+          offsetY: -18,
+          stage: 0,
+        };
+        const stage = Math.max(current.stage ?? 0, 1);
+        next[station.id] = { ...current, stage };
+      });
+      return next;
+    });
+  };
+
+  const hasVisibleCatchments = visibleStationCatchmentCircles.length > 0;
+
   return (
     <div
       style={{
@@ -3478,9 +3539,9 @@ export default function App() {
                 </g>
               ) : null}
 
-              {showStationCatchment && stationCatchmentCircles.length ? (
+              {visibleStationCatchmentCircles.length ? (
                 <g>
-                  {stationCatchmentCircles.map((circle) => (
+                  {visibleStationCatchmentCircles.map((circle) => (
                     <circle
                       key={`catchment-${circle.id}`}
                       cx={circle.x}
@@ -3490,17 +3551,14 @@ export default function App() {
                       stroke="rgba(255,82,82,0.65)"
                       strokeWidth={1 / transform.k}
                       cursor="pointer"
-                      onClick={() => {
-                        setStationIndicators((prev) => {
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setStationCatchmentState((prev) => {
                           const current = prev[circle.id];
-                          const nextVisible = !current?.visible;
-                          const base = current || { offsetX: 18, offsetY: -18 };
+                          if (!current) return prev;
                           return {
                             ...prev,
-                            [circle.id]: {
-                              ...base,
-                              visible: nextVisible,
-                            },
+                            [circle.id]: { ...current, stage: 0 },
                           };
                         });
                       }}
@@ -3510,9 +3568,8 @@ export default function App() {
               ) : null}
 
               {/* Rail overlay */}
-              {showRail && (
-                <>
-                  {railPaths.map((p) => (
+              {showRailLines
+                ? railPaths.map((p) => (
                     <path
                       key={p.id}
                       d={p.d}
@@ -3523,10 +3580,12 @@ export default function App() {
                       strokeLinejoin="round"
                       opacity={0.9}
                     />
-                  ))}
+                  ))
+                : null}
 
-                  {/* Stations */}
-                  {stationPoints.map((s) => (
+              {/* Stations */}
+              {showStations
+                ? stationPoints.map((s) => (
                     <g key={s.id}>
                       <circle
                         cx={s.x}
@@ -3535,11 +3594,15 @@ export default function App() {
                         fill="#fff"
                         stroke={s.color}
                         strokeWidth={2 / transform.k}
+                        cursor="pointer"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleStationCatchment(s.id);
+                        }}
                       />
                     </g>
-                  ))}
-                </>
-              )}
+                  ))
+                : null}
 
               {/* Restaurant cluster labels (above all circles) */}
               {mode === 'restaurant' &&
@@ -3565,7 +3628,7 @@ export default function App() {
                 : null}
 
               {/* Station labels (topmost) */}
-              {showRail && mode !== 'ridership'
+              {showStationLabels && mode !== 'ridership'
                 ? stationLabelPoints.map((s) => {
                     const fontSize = 12 / transform.k;
                     const paddingX = 4 / transform.k;
@@ -3576,7 +3639,14 @@ export default function App() {
                     const labelCenterY =
                       s.y - (stationRadius + 4) / transform.k;
                     return (
-                      <g key={`station-label-${s.id}`} style={{ pointerEvents: 'none' }}>
+                      <g
+                        key={`station-label-${s.id}`}
+                        style={{ pointerEvents: 'auto', cursor: 'pointer' }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleStationCatchment(s.id);
+                        }}
+                      >
                         <rect
                           x={s.x - labelWidth / 2}
                           y={labelCenterY - labelHeight / 2}
@@ -3602,7 +3672,7 @@ export default function App() {
           )}
         </svg>
 
-        {mode === 'ridership' && showRail ? (
+        {mode === 'ridership' && showStations ? (
           <div
             style={{
               position: 'absolute',
@@ -3708,7 +3778,7 @@ export default function App() {
           </div>
         ) : null}
 
-        {showRail && lineLabelScreenPoints.length ? (
+        {showRailLines && lineLabelScreenPoints.length ? (
           <div
             style={{
               position: 'absolute',
@@ -3763,7 +3833,7 @@ export default function App() {
           </div>
         ) : null}
 
-        {showStationCatchment && Object.keys(stationIndicators).length ? (
+        {Object.keys(stationCatchmentState).length ? (
           <div
             style={{
               position: 'absolute',
@@ -3774,8 +3844,8 @@ export default function App() {
               pointerEvents: 'none',
             }}
           >
-            {Object.entries(stationIndicators).map(([id, info]) => {
-              if (!info?.visible) return null;
+            {Object.entries(stationCatchmentState).map(([id, info]) => {
+              if (!info?.stage || info.stage < 2) return null;
               const stationPos = stationScreenLookup.get(id);
               if (!stationPos) return null;
               const stats = stationStats.get(id);
@@ -3872,9 +3942,9 @@ export default function App() {
                       }}
                       onClick={(e) => {
                         e.stopPropagation();
-                        setStationIndicators((prev) => ({
+                        setStationCatchmentState((prev) => ({
                           ...prev,
-                          [id]: { ...prev[id], visible: false },
+                          [id]: { ...prev[id], stage: 1 },
                         }));
                       }}
                     >
@@ -4205,10 +4275,10 @@ export default function App() {
                 >
                   <input
                     type="checkbox"
-                    checked={showRail}
-                    onChange={(e) => setShowRail(e.target.checked)}
+                    checked={showRailLines}
+                    onChange={(e) => setShowRailLines(e.target.checked)}
                   />
-                  <span>路線・駅を表示</span>
+                  <span>路線を表示</span>
                 </label>
 
                 <label
@@ -4221,11 +4291,37 @@ export default function App() {
                 >
                   <input
                     type="checkbox"
-                    checked={showStationCatchment}
-                    onChange={(e) => setShowStationCatchment(e.target.checked)}
+                    checked={showStations}
+                    onChange={(e) => setShowStations(e.target.checked)}
                   />
-                  <span>駅500m圏を表示</span>
+                  <span>駅を表示</span>
                 </label>
+
+                <label
+                  style={{
+                    display: 'flex',
+                    gap: 10,
+                    alignItems: 'center',
+                    marginTop: 8,
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={showStationLabels}
+                    onChange={(e) => setShowStationLabels(e.target.checked)}
+                  />
+                  <span>駅名を表示</span>
+                </label>
+
+                <button
+                  type="button"
+                  style={{ ...btnStyle, marginTop: 10, width: '100%' }}
+                  onClick={toggleAllCatchments}
+                >
+                  {areAllCatchmentsVisible
+                    ? '駅500m圏をすべて非表示'
+                    : '駅500m圏をすべて表示'}
+                </button>
 
                 {/* ★追加：線の太さ */}
                 <div style={{ marginTop: 10 }}>
@@ -4748,7 +4844,7 @@ export default function App() {
                           style={btnStyle}
                           onClick={handleStationSummaryDownload}
                           disabled={
-                            !showStationCatchment || !stationSummaryRows.length
+                            !hasVisibleCatchments || !stationSummaryRows.length
                           }
                         >
                           駅500m圏内の全駅CSVをダウンロード
@@ -4756,7 +4852,7 @@ export default function App() {
                         <div
                           style={{ marginTop: 6, fontSize: 12, opacity: 0.8 }}
                         >
-                          {showStationCatchment
+                          {hasVisibleCatchments
                             ? '駅500m圏内の飲食店集計をCSVで出力します。'
                             : '駅500m圏を表示中にダウンロードできます。'}
                         </div>
@@ -4765,7 +4861,7 @@ export default function App() {
                           style={{ ...btnStyle, marginTop: 8 }}
                           onClick={handleStationRankingDownload}
                           disabled={
-                            !showStationCatchment || !stationSummaryRows.length
+                            !hasVisibleCatchments || !stationSummaryRows.length
                           }
                         >
                           全駅ランキングをダウンロード
@@ -4773,7 +4869,7 @@ export default function App() {
                         <div
                           style={{ marginTop: 6, fontSize: 12, opacity: 0.8 }}
                         >
-                          {showStationCatchment
+                          {hasVisibleCatchments
                             ? '駅500m圏内の各指標ランキングをCSVで出力します。'
                             : '駅500m圏を表示中にダウンロードできます。'}
                         </div>
@@ -5013,7 +5109,7 @@ export default function App() {
           )}
         </div>
 
-        {showRail && (
+        {showRailLines && (
           <div
             style={{
               position: 'absolute',
