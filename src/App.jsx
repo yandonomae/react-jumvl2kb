@@ -153,6 +153,71 @@ const buildRestaurantClusters = (
   }));
 };
 
+const computeCatchmentStats = (restaurantPoints, center) => {
+  let count = 0;
+  let commentTotal = 0;
+  let bookmarkTotal = 0;
+  let ratingSum = 0;
+  let ratingCount = 0;
+  const categories = new Map();
+  const nightBudgets = [];
+  const lunchBudgets = [];
+
+  for (const point of restaurantPoints) {
+    if (!Number.isFinite(point.lat) || !Number.isFinite(point.lon)) continue;
+    const distance = haversineMeters(
+      center.lat,
+      center.lon,
+      point.lat,
+      point.lon
+    );
+    if (distance > STATION_CATCHMENT_METERS) continue;
+    count += 1;
+
+    const comments = safeToNumber(point.comments);
+    if (comments !== null) commentTotal += comments;
+    const bookmarks = safeToNumber(point.bookmarks);
+    if (bookmarks !== null) bookmarkTotal += bookmarks;
+    const ratingValue = safeToNumber(point.ratingValue);
+    if (ratingValue !== null) {
+      ratingSum += ratingValue;
+      ratingCount += 1;
+    }
+
+    const nightBudget = parseBudgetValue(point.budgetNight);
+    if (nightBudget !== null) nightBudgets.push(nightBudget);
+    const lunchBudget = parseBudgetValue(point.budgetLunch);
+    if (lunchBudget !== null) lunchBudgets.push(lunchBudget);
+
+    const categoryList = Array.isArray(point.categories)
+      ? point.categories
+      : splitRestaurantCategories(point.category);
+    if (categoryList.length) {
+      categoryList.forEach((c) => {
+        categories.set(c, (categories.get(c) ?? 0) + 1);
+      });
+    }
+  }
+
+  const topCategories = Array.from(categories.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([name, countValue]) => ({ name, count: countValue }));
+
+  const average = (vals) =>
+    vals.length ? vals.reduce((sum, v) => sum + v, 0) / vals.length : null;
+
+  return {
+    count,
+    topCategories,
+    commentTotal,
+    bookmarkTotal,
+    avgRating: ratingCount ? ratingSum / ratingCount : null,
+    avgNightBudget: average(nightBudgets),
+    avgLunchBudget: average(lunchBudgets),
+  };
+};
+
 // 路線データ（[lon, lat]）
 const RAIL_LINES = [
   {
@@ -1661,6 +1726,11 @@ export default function App() {
   const [draggingIndicator, setDraggingIndicator] = useState(null);
   const [lineLabelOffsets, setLineLabelOffsets] = useState({});
   const [draggingLineLabel, setDraggingLineLabel] = useState(null);
+  const [customPoints, setCustomPoints] = useState([]);
+  const [isPlacingCustomPoint, setIsPlacingCustomPoint] = useState(false);
+  const [customPointDraft, setCustomPointDraft] = useState(null);
+  const [draggingCustomIndicator, setDraggingCustomIndicator] = useState(null);
+  const nextCustomPointId = useRef(1);
 
   // 乗降客数インジケーター
   const [ridershipIconSize, setRidershipIconSize] = useState(
@@ -2151,6 +2221,31 @@ export default function App() {
   }, [draggingIndicator]);
 
   useEffect(() => {
+    if (!draggingCustomIndicator) return undefined;
+    const handleMove = (e) => {
+      setCustomPoints((prev) =>
+        prev.map((point) => {
+          if (point.id !== draggingCustomIndicator.id) return point;
+          const dx = e.clientX - draggingCustomIndicator.startX;
+          const dy = e.clientY - draggingCustomIndicator.startY;
+          return {
+            ...point,
+            offsetX: draggingCustomIndicator.originX + dx,
+            offsetY: draggingCustomIndicator.originY + dy,
+          };
+        })
+      );
+    };
+    const handleUp = () => setDraggingCustomIndicator(null);
+    window.addEventListener('mousemove', handleMove);
+    window.addEventListener('mouseup', handleUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMove);
+      window.removeEventListener('mouseup', handleUp);
+    };
+  }, [draggingCustomIndicator]);
+
+  useEffect(() => {
     if (!draggingRidershipIndicator) return undefined;
     const handleMove = (e) => {
       setRidershipIndicatorOffsets((prev) => {
@@ -2208,6 +2303,11 @@ export default function App() {
     };
   }, [draggingLineLabel]);
 
+  useEffect(() => {
+    if (isPlacingCustomPoint) return;
+    setCustomPointDraft(null);
+  }, [isPlacingCustomPoint]);
+
   const zoomIn = () => {
     if (!svgRef.current || !zoomRef.current) return;
     select(svgRef.current).call(zoomRef.current.scaleBy, 1.25);
@@ -2219,6 +2319,16 @@ export default function App() {
   const resetView = () => {
     if (!svgRef.current || !zoomRef.current) return;
     select(svgRef.current).call(zoomRef.current.transform, zoomIdentity);
+  };
+
+  const getMapPointFromEvent = (event) => {
+    if (!svgRef.current || !projection) return null;
+    const rect = svgRef.current.getBoundingClientRect();
+    const x = (event.clientX - rect.left - transform.x) / transform.k;
+    const y = (event.clientY - rect.top - transform.y) / transform.k;
+    const inverted = projection.invert([x, y]);
+    if (!inverted) return null;
+    return { x, y, lon: inverted[0], lat: inverted[1] };
   };
 
   const buildFeatureValue = ({
@@ -2580,6 +2690,64 @@ export default function App() {
       ),
     [stationScreenPoints]
   );
+
+  const customPointProjected = useMemo(() => {
+    if (!projection) return [];
+    return customPoints
+      .map((point) => {
+        const projected = projection([point.lon, point.lat]);
+        if (!projected) return null;
+        return { ...point, x: projected[0], y: projected[1] };
+      })
+      .filter(Boolean);
+  }, [customPoints, projection]);
+
+  const customCatchmentCircles = useMemo(() => {
+    if (!projection) return [];
+    return customPointProjected
+      .map((point) => {
+        const offset = offsetLatLon(
+          { lat: point.lat, lon: point.lon },
+          STATION_CATCHMENT_METERS,
+          Math.PI / 2
+        );
+        const edge = projection([offset.lon, offset.lat]);
+        if (!edge) return null;
+        const radius = Math.hypot(edge[0] - point.x, edge[1] - point.y);
+        return { id: point.id, x: point.x, y: point.y, radius };
+      })
+      .filter(Boolean);
+  }, [customPointProjected, projection]);
+
+  const visibleCustomCatchmentCircles = useMemo(
+    () =>
+      customCatchmentCircles.filter((circle) => {
+        const point = customPoints.find((item) => item.id === circle.id);
+        return (point?.stage ?? 0) >= 1;
+      }),
+    [customCatchmentCircles, customPoints]
+  );
+
+  const customPointScreenPoints = useMemo(
+    () =>
+      customPointProjected.map((point) => ({
+        ...point,
+        screenX: point.x * transform.k + transform.x,
+        screenY: point.y * transform.k + transform.y,
+      })),
+    [customPointProjected, transform]
+  );
+
+  const customPointScreenLookup = useMemo(
+    () =>
+      new Map(
+        customPointScreenPoints.map((point) => [
+          point.id,
+          { x: point.screenX, y: point.screenY, name: point.label },
+        ])
+      ),
+    [customPointScreenPoints]
+  );
   // 乗降客数アイコンは /data/人員.png を参照（画像は外部で差し替え可能）
   const ridershipIconUrl = useMemo(
     () => resolvePublicUrl('data/人員.png'),
@@ -2758,73 +2926,31 @@ export default function App() {
     const statsMap = new Map();
     if (!stations.length || !restaurantPoints.length) return statsMap;
     for (const station of stations) {
-      let count = 0;
-      let commentTotal = 0;
-      let bookmarkTotal = 0;
-      let ratingSum = 0;
-      let ratingCount = 0;
-      const categories = new Map();
-      const nightBudgets = [];
-      const lunchBudgets = [];
-
-      for (const point of restaurantPoints) {
-        if (!Number.isFinite(point.lat) || !Number.isFinite(point.lon)) continue;
-        const distance = haversineMeters(
-          station.lat,
-          station.lon,
-          point.lat,
-          point.lon
-        );
-        if (distance > STATION_CATCHMENT_METERS) continue;
-        count += 1;
-
-        const comments = safeToNumber(point.comments);
-        if (comments !== null) commentTotal += comments;
-        const bookmarks = safeToNumber(point.bookmarks);
-        if (bookmarks !== null) bookmarkTotal += bookmarks;
-        const ratingValue = safeToNumber(point.ratingValue);
-        if (ratingValue !== null) {
-          ratingSum += ratingValue;
-          ratingCount += 1;
-        }
-
-        const nightBudget = parseBudgetValue(point.budgetNight);
-        if (nightBudget !== null) nightBudgets.push(nightBudget);
-        const lunchBudget = parseBudgetValue(point.budgetLunch);
-        if (lunchBudget !== null) lunchBudgets.push(lunchBudget);
-
-        const categoryList = Array.isArray(point.categories)
-          ? point.categories
-          : splitRestaurantCategories(point.category);
-        if (categoryList.length) {
-          categoryList.forEach((c) => {
-            categories.set(c, (categories.get(c) ?? 0) + 1);
-          });
-        }
-      }
-
-      const topCategories = Array.from(categories.entries())
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 5)
-        .map(([name, countValue]) => ({ name, count: countValue }));
-
-      const average = (vals) =>
-        vals.length
-          ? vals.reduce((sum, v) => sum + v, 0) / vals.length
-          : null;
-
-      statsMap.set(station.id, {
-        count,
-        topCategories,
-        commentTotal,
-        bookmarkTotal,
-        avgRating: ratingCount ? ratingSum / ratingCount : null,
-        avgNightBudget: average(nightBudgets),
-        avgLunchBudget: average(lunchBudgets),
-      });
+      statsMap.set(
+        station.id,
+        computeCatchmentStats(restaurantPoints, {
+          lat: station.lat,
+          lon: station.lon,
+        })
+      );
     }
     return statsMap;
   }, [stations, restaurantPoints]);
+
+  const customPointStats = useMemo(() => {
+    const statsMap = new Map();
+    if (!customPointProjected.length || !restaurantPoints.length) return statsMap;
+    for (const point of customPointProjected) {
+      statsMap.set(
+        point.id,
+        computeCatchmentStats(restaurantPoints, {
+          lat: point.lat,
+          lon: point.lon,
+        })
+      );
+    }
+    return statsMap;
+  }, [customPointProjected, restaurantPoints]);
 
   const stationSummaryRows = useMemo(() => {
     if (!stations.length) return [];
@@ -3299,6 +3425,40 @@ export default function App() {
     });
   };
 
+  const toggleCustomPointStage = (pointId) => {
+    setCustomPoints((prev) =>
+      prev.map((point) => {
+        if (point.id !== pointId) return point;
+        const currentStage = point.stage ?? 0;
+        const nextStage = currentStage === 0 ? 1 : currentStage === 1 ? 2 : 0;
+        return { ...point, stage: nextStage };
+      })
+    );
+  };
+
+  const handlePlaceCustomPoint = (event) => {
+    if (!isPlacingCustomPoint) return;
+    const point = getMapPointFromEvent(event);
+    if (!point) return;
+    const id = `custom-point-${nextCustomPointId.current}`;
+    const label = `追加点 ${nextCustomPointId.current}`;
+    nextCustomPointId.current += 1;
+    setCustomPoints((prev) => [
+      ...prev,
+      {
+        id,
+        label,
+        lat: point.lat,
+        lon: point.lon,
+        stage: 0,
+        offsetX: 18,
+        offsetY: -18,
+      },
+    ]);
+    setIsPlacingCustomPoint(false);
+    setCustomPointDraft(null);
+  };
+
   const toggleAllCatchments = () => {
     setStationCatchmentState((prev) => {
       const next = { ...prev };
@@ -3343,7 +3503,17 @@ export default function App() {
           ref={svgRef}
           width={width}
           height={height}
-          style={{ display: 'block', cursor: 'grab' }}
+          style={{
+            display: 'block',
+            cursor: isPlacingCustomPoint ? 'crosshair' : 'grab',
+          }}
+          onMouseMove={(event) => {
+            if (!isPlacingCustomPoint) return;
+            const point = getMapPointFromEvent(event);
+            if (!point) return;
+            setCustomPointDraft(point);
+          }}
+          onClick={handlePlaceCustomPoint}
         >
           <rect x={0} y={0} width={width} height={height} fill="#fff" />
 
@@ -3567,6 +3737,33 @@ export default function App() {
                 </g>
               ) : null}
 
+              {visibleCustomCatchmentCircles.length ? (
+                <g>
+                  {visibleCustomCatchmentCircles.map((circle) => (
+                    <circle
+                      key={`custom-catchment-${circle.id}`}
+                      cx={circle.x}
+                      cy={circle.y}
+                      r={circle.radius}
+                      fill="rgba(255,82,82,0.12)"
+                      stroke="rgba(255,82,82,0.65)"
+                      strokeWidth={1 / transform.k}
+                      cursor="pointer"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setCustomPoints((prev) =>
+                          prev.map((point) =>
+                            point.id === circle.id
+                              ? { ...point, stage: 0 }
+                              : point
+                          )
+                        );
+                      }}
+                    />
+                  ))}
+                </g>
+              ) : null}
+
               {/* Rail overlay */}
               {showRailLines
                 ? railPaths.map((p) => (
@@ -3603,6 +3800,40 @@ export default function App() {
                     </g>
                   ))
                 : null}
+
+              {/* Custom points */}
+              {customPointProjected.length ? (
+                <g>
+                  {customPointProjected.map((point) => (
+                    <circle
+                      key={point.id}
+                      cx={point.x}
+                      cy={point.y}
+                      r={stationRadius / transform.k}
+                      fill="#fff"
+                      stroke="#444"
+                      strokeWidth={2 / transform.k}
+                      cursor="pointer"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleCustomPointStage(point.id);
+                      }}
+                    />
+                  ))}
+                </g>
+              ) : null}
+
+              {isPlacingCustomPoint && customPointDraft ? (
+                <circle
+                  cx={customPointDraft.x}
+                  cy={customPointDraft.y}
+                  r={stationRadius / transform.k}
+                  fill="#fff"
+                  stroke="#444"
+                  strokeWidth={2 / transform.k}
+                  pointerEvents="none"
+                />
+              ) : null}
 
               {/* Restaurant cluster labels (above all circles) */}
               {mode === 'restaurant' &&
@@ -3953,6 +4184,153 @@ export default function App() {
                   </div>
                   <div style={{ padding: '8px 10px', whiteSpace: 'pre-line' }}>
                     {popupText}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : null}
+
+        {customPoints.length ? (
+          <div
+            style={{
+              position: 'absolute',
+              left: 0,
+              top: 0,
+              width: '100%',
+              height: '100%',
+              pointerEvents: 'none',
+            }}
+          >
+            {customPoints.map((point) => {
+              if (!point?.stage || point.stage < 2) return null;
+              const pointPos = customPointScreenLookup.get(point.id);
+              if (!pointPos) return null;
+              const stats = customPointStats.get(point.id);
+              const topCategories = stats?.topCategories ?? [];
+              const averageComments =
+                stats?.count ? stats.commentTotal / stats.count : null;
+              const averageBookmarks =
+                stats?.count ? stats.bookmarkTotal / stats.count : null;
+              const topCategoryRows = Array.from({ length: 5 }, (_, index) => {
+                const item = topCategories[index];
+                return item ? `・${item.name} (${item.count})` : '・—';
+              });
+              const popupText = [
+                `飲食店数: ${formatNumber(stats?.count ?? 0)}`,
+                `平均評価: ${formatDecimal(stats?.avgRating ?? null, 2)}`,
+                `コメント合計: ${formatNumber(stats?.commentTotal ?? 0)}`,
+                `（一店舗あたり平均：${formatDecimal(
+                  averageComments ?? null
+                )}）`,
+                `ブックマーク合計: ${formatNumber(stats?.bookmarkTotal ?? 0)}`,
+                `（一店舗あたり平均：${formatDecimal(
+                  averageBookmarks ?? null
+                )}）`,
+                `平均昼予算: ${
+                  stats?.avgLunchBudget !== null &&
+                  stats?.avgLunchBudget !== undefined
+                    ? `￥${formatDecimal(stats.avgLunchBudget, 1)}`
+                    : '—'
+                }`,
+                `平均夜予算: ${
+                  stats?.avgNightBudget !== null &&
+                  stats?.avgNightBudget !== undefined
+                    ? `￥${formatDecimal(stats.avgNightBudget, 1)}`
+                    : '—'
+                }`,
+                '',
+                '頻出カテゴリ上位5:',
+                ...topCategoryRows,
+              ].join('\n');
+              return (
+                <div
+                  key={`custom-indicator-${point.id}`}
+                  style={{
+                    position: 'absolute',
+                    left: pointPos.x + point.offsetX,
+                    top: pointPos.y + point.offsetY,
+                    width: 260,
+                    background: 'rgba(255,255,255,0.95)',
+                    borderRadius: 12,
+                    border: '1px solid rgba(0,0,0,0.12)',
+                    boxShadow: '0 8px 20px rgba(0,0,0,0.15)',
+                    fontSize: 12,
+                    pointerEvents: 'auto',
+                  }}
+                >
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      padding: '8px 10px',
+                      borderBottom: '1px solid rgba(0,0,0,0.08)',
+                      cursor: 'move',
+                      fontWeight: 800,
+                    }}
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setDraggingCustomIndicator({
+                        id: point.id,
+                        startX: e.clientX,
+                        startY: e.clientY,
+                        originX: point.offsetX,
+                        originY: point.offsetY,
+                      });
+                    }}
+                  >
+                    <span>{pointPos.name}</span>
+                    <button
+                      type="button"
+                      style={{
+                        border: 'none',
+                        background: 'transparent',
+                        cursor: 'pointer',
+                        fontWeight: 700,
+                      }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setCustomPoints((prev) =>
+                          prev.map((item) =>
+                            item.id === point.id
+                              ? { ...item, stage: 1 }
+                              : item
+                          )
+                        );
+                      }}
+                    >
+                      ×
+                    </button>
+                  </div>
+                  <div style={{ padding: '8px 10px', whiteSpace: 'pre-line' }}>
+                    {popupText}
+                  </div>
+                  <div
+                    style={{
+                      padding: '0 10px 10px',
+                      display: 'flex',
+                      justifyContent: 'flex-end',
+                    }}
+                  >
+                    <button
+                      type="button"
+                      style={{
+                        ...btnStyle,
+                        background: '#fff0f0',
+                        color: '#d32f2f',
+                        borderColor: 'rgba(211,47,47,0.35)',
+                      }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setCustomPoints((prev) =>
+                          prev.filter((item) => item.id !== point.id)
+                        );
+                      }}
+                    >
+                      この点を削除する
+                    </button>
                   </div>
                 </div>
               );
@@ -4321,6 +4699,19 @@ export default function App() {
                   {areAllCatchmentsVisible
                     ? '駅500m圏をすべて非表示'
                     : '駅500m圏をすべて表示'}
+                </button>
+
+                <button
+                  type="button"
+                  style={{ ...btnStyle, marginTop: 8, width: '100%' }}
+                  onClick={() => {
+                    setIsPlacingCustomPoint(true);
+                    setCustomPointDraft(null);
+                  }}
+                >
+                  {isPlacingCustomPoint
+                    ? '地図上をクリックして点を追加'
+                    : '点を追加して集計'}
                 </button>
 
                 {/* ★追加：線の太さ */}
