@@ -663,7 +663,7 @@ const RIDERSHIP_BY_STATION_ID = {
   nk_箕面萱野: 19985,
 };
 
-const DEFAULT_MODE = 'population'; // population | household | business | analysis | restaurant | restaurant-analysis | ridership
+const DEFAULT_MODE = 'population'; // population | household | business | analysis-household | analysis-population | restaurant | restaurant-analysis | ridership
 
 const RESTAURANT_GRID_SIZE_METERS = 250;
 const RIDERSHIP_ICON_STEP = 5000;
@@ -756,6 +756,21 @@ const ANALYSIS_METRIC_OPTIONS = [
   '親族のみの世帯',
   '非親族を含む世帯',
   '世帯の家族類型「不詳」',
+];
+
+const POP_ANALYSIS_METRICS = [
+  {
+    id: 'elderly',
+    label: '高齢者(65歳以上)割合',
+    preferredColumn: '（再掲）65歳以上',
+    fallbackMatch: '65歳以上',
+  },
+  {
+    id: 'child',
+    label: '子供(15歳未満)割合',
+    preferredColumn: '（再掲）15歳未満',
+    fallbackMatch: '15歳未満',
+  },
 ];
 
 const STATION_CATCHMENT_METERS = 500;
@@ -1526,6 +1541,9 @@ function Legend({ mode, min, max, midLabel, layout }) {
     return Array.from({ length: 11 }, (_, i) => safeMin + step * i);
   }, [layout, roundedMax]);
 
+  const isAnalysisMode =
+    mode === 'analysis-household' || mode === 'analysis-population';
+
   const getColor = (t) => {
     if (mode === 'population') return interpolateYlOrRd(t);
     if (mode === 'household') return interpolateGreens(t);
@@ -1559,7 +1577,9 @@ function Legend({ mode, min, max, midLabel, layout }) {
           ? '事業所'
           : mode === 'restaurant-analysis'
           ? '飲食店分析'
-          : '分析（特化係数）'}
+          : mode === 'analysis-population'
+          ? '分析_人口（特化係数）'
+          : '分析_世帯（特化係数）'}
         ）
       </div>
       {layout === 'vertical' ? (
@@ -1644,7 +1664,7 @@ function Legend({ mode, min, max, midLabel, layout }) {
           </div>
         </>
       )}
-      {mode === 'analysis' && (
+      {isAnalysisMode && (
         <div style={{ marginTop: 6, fontSize: 12, opacity: 0.8 }}>
           1.0 が市平均。&nbsp;赤=特化 / 青=非特化
         </div>
@@ -1715,6 +1735,7 @@ export default function App() {
 
   // 分析（特化係数）
   const [analysisMetric, setAnalysisMetric] = useState('単独世帯');
+  const [analysisPopMetric, setAnalysisPopMetric] = useState('');
 
   // 飲食店（評価フィルタ）
   const [ratingSel, setRatingSel] = useState(new Set());
@@ -2043,6 +2064,23 @@ export default function App() {
     return v.filter(Boolean);
   }, [popRows]);
 
+  const popAnalysisMetricOptions = useMemo(() => {
+    if (!popRows?.length) return [];
+    const keys = Object.keys(popRows[0] || {});
+    const findColumn = (preferred, fallbackMatch) => {
+      if (keys.includes(preferred)) return preferred;
+      return keys.find((k) => k.includes(fallbackMatch)) || '';
+    };
+    return POP_ANALYSIS_METRICS.map((metric) => {
+      const column = findColumn(
+        metric.preferredColumn,
+        metric.fallbackMatch
+      );
+      if (!column) return null;
+      return { ...metric, column };
+    }).filter(Boolean);
+  }, [popRows]);
+
   const householdRowTypeOptions = useMemo(() => {
     if (!hhRows?.length) return [];
     const v = uniq(
@@ -2110,6 +2148,13 @@ export default function App() {
     if (analysisMetricOptions.includes(analysisMetric)) return;
     setAnalysisMetric(analysisMetricOptions[0]);
   }, [analysisMetricOptions, analysisMetric]);
+
+  useEffect(() => {
+    if (!popAnalysisMetricOptions.length) return;
+    const columns = popAnalysisMetricOptions.map((opt) => opt.column);
+    if (analysisPopMetric && columns.includes(analysisPopMetric)) return;
+    setAnalysisPopMetric(popAnalysisMetricOptions[0].column);
+  }, [analysisPopMetric, popAnalysisMetricOptions]);
 
   useEffect(() => {
     if (!ratingOptions.length) return;
@@ -2430,37 +2475,76 @@ export default function App() {
       return map;
     }
 
-    // analysis
-    if (!hhRows?.length) return map;
+    if (mode === 'analysis-household') {
+      if (!hhRows?.length) return map;
 
-    let cityNumer = 0;
-    let cityDenom = 0;
-    const temp = [];
+      let cityNumer = 0;
+      let cityDenom = 0;
+      const temp = [];
 
-    for (const r of hhRows) {
-      const key = buildCompositeKeyFromRow(r, areaLengths, keySet);
-      if (!key) continue;
-      if (!isTargetCity(key)) continue;
+      for (const r of hhRows) {
+        const key = buildCompositeKeyFromRow(r, areaLengths, keySet);
+        if (!key) continue;
+        if (!isTargetCity(key)) continue;
 
-      const rowType = normalizeKeyString(r['世帯員の年齢による世帯の種類']);
-      if (rowType !== hhRowType) continue;
+        const rowType = normalizeKeyString(r['世帯員の年齢による世帯の種類']);
+        if (rowType !== hhRowType) continue;
 
-      const numer = safeToNumber(r[analysisMetric]);
-      const denom = safeToNumber(r['総数']);
-      if (numer === null || denom === null || denom === 0) continue;
+        const numer = safeToNumber(r[analysisMetric]);
+        const denom = safeToNumber(r['総数']);
+        if (numer === null || denom === null || denom === 0) continue;
 
-      cityNumer += numer;
-      cityDenom += denom;
-      temp.push({ key, numer, denom });
+        cityNumer += numer;
+        cityDenom += denom;
+        temp.push({ key, numer, denom });
+      }
+
+      const cityRatio = cityDenom ? cityNumer / cityDenom : null;
+      if (!cityRatio || cityRatio === 0) return map;
+
+      for (const { key, numer, denom } of temp) {
+        const localRatio = numer / denom;
+        const coef = localRatio / cityRatio;
+        map.set(key, coef);
+      }
+
+      return map;
     }
 
-    const cityRatio = cityDenom ? cityNumer / cityDenom : null;
-    if (!cityRatio || cityRatio === 0) return map;
+    if (mode === 'analysis-population') {
+      if (!popRows?.length || !analysisPopMetric) return map;
 
-    for (const { key, numer, denom } of temp) {
-      const localRatio = numer / denom;
-      const coef = localRatio / cityRatio;
-      map.set(key, coef);
+      let cityNumer = 0;
+      let cityDenom = 0;
+      const temp = [];
+
+      for (const r of popRows) {
+        const key = buildCompositeKeyFromRow(r, areaLengths, keySet);
+        if (!key) continue;
+        if (!isTargetCity(key)) continue;
+
+        const sex = normalizeKeyString(r['男女']);
+        if (sex && sex !== '総数') continue;
+
+        const numer = safeToNumber(r[analysisPopMetric]);
+        const denom = safeToNumber(r['総数']);
+        if (numer === null || denom === null || denom === 0) continue;
+
+        cityNumer += numer;
+        cityDenom += denom;
+        temp.push({ key, numer, denom });
+      }
+
+      const cityRatio = cityDenom ? cityNumer / cityDenom : null;
+      if (!cityRatio || cityRatio === 0) return map;
+
+      for (const { key, numer, denom } of temp) {
+        const localRatio = numer / denom;
+        const coef = localRatio / cityRatio;
+        map.set(key, coef);
+      }
+
+      return map;
     }
 
     return map;
@@ -2489,6 +2573,7 @@ export default function App() {
     hhMetric,
     bizMetric,
     analysisMetric,
+    analysisPopMetric,
   ]);
 
   const featureValueAll = useMemo(() => {
@@ -2513,6 +2598,7 @@ export default function App() {
     hhMetric,
     bizMetric,
     analysisMetric,
+    analysisPopMetric,
   ]);
 
 
@@ -3073,6 +3159,9 @@ export default function App() {
     cityBoundaryFeatures,
   ]);
 
+  const isAnalysisMode =
+    mode === 'analysis-household' || mode === 'analysis-population';
+
   // --- Stats + color scale ---
   const valueStats = useMemo(() => {
     if (mode === 'restaurant' || mode === 'ridership')
@@ -3102,7 +3191,7 @@ export default function App() {
 
     const [mn, mx] = extent(vals);
 
-    if (mode === 'analysis') return { min: mn ?? 0, max: mx ?? 1, mid: 1.0 };
+    if (isAnalysisMode) return { min: mn ?? 0, max: mx ?? 1, mid: 1.0 };
     return { min: mn ?? 0, max: mx ?? 1, mid: null };
   }, [
     mode,
@@ -3112,6 +3201,7 @@ export default function App() {
     featureValueAll,
     scaleScope,
     restaurantGrid,
+    isAnalysisMode,
   ]);
 
   const colorForValue = useMemo(() => {
@@ -3130,7 +3220,7 @@ export default function App() {
     }
     const { min, max } = valueStats;
 
-    if (mode === 'analysis') {
+    if (isAnalysisMode) {
       const mx = Math.max(1.0, max || 1.0);
       const mn = Math.min(1.0, min || 1.0);
       const s = scaleDiverging(interpolateRdBu).domain([mx, 1.0, mn]);
@@ -3149,7 +3239,7 @@ export default function App() {
     seq.domain([mn, mx || 1]);
 
     return (v) => seq(v);
-  }, [mode, valueStats]);
+  }, [mode, valueStats, isAnalysisMode]);
 
   const cityLabel = useMemo(() => {
     if (!selectedCityNames.length) return '';
@@ -4442,7 +4532,7 @@ export default function App() {
               <div
                 style={{
                   display: 'grid',
-                  gridTemplateColumns: 'repeat(7, 1fr)',
+                  gridTemplateColumns: 'repeat(8, 1fr)',
                   gap: 6,
                   marginBottom: 12,
                 }}
@@ -4463,9 +4553,14 @@ export default function App() {
                   onClick={() => setMode('business')}
                 />
                 <ModeBtn
-                  label="分析"
-                  active={mode === 'analysis'}
-                  onClick={() => setMode('analysis')}
+                  label="分析_世帯"
+                  active={mode === 'analysis-household'}
+                  onClick={() => setMode('analysis-household')}
+                />
+                <ModeBtn
+                  label="分析_人口"
+                  active={mode === 'analysis-population'}
+                  onClick={() => setMode('analysis-population')}
                 />
                 <ModeBtn
                   label="飲食店"
@@ -5002,8 +5097,8 @@ export default function App() {
                 </Section>
               )}
 
-              {mode === 'analysis' && (
-                <Section title="分析モード（特化係数）">
+              {mode === 'analysis-household' && (
+                <Section title="分析_世帯モード（特化係数）">
                   {!hhRows ? (
                     <div style={{ fontSize: 12, opacity: 0.75 }}>
                       世帯データが読み込まれると分析が有効になります。
@@ -5063,6 +5158,55 @@ export default function App() {
                         style={{ marginTop: 10, fontSize: 12, opacity: 0.75 }}
                       >
                         ※h06の列に存在する指標のみ表示しています（毎回同じフォーマット想定）。
+                      </div>
+                    </>
+                  )}
+                </Section>
+              )}
+
+              {mode === 'analysis-population' && (
+                <Section title="分析_人口モード（特化係数）">
+                  {!popRows ? (
+                    <div style={{ fontSize: 12, opacity: 0.75 }}>
+                      人口データが読み込まれると分析が有効になります。
+                    </div>
+                  ) : popAnalysisMetricOptions.length === 0 ? (
+                    <div style={{ fontSize: 12, opacity: 0.75 }}>
+                      （再掲）15歳未満 / （再掲）65歳以上 の列が見つかりませんでした。ヘッダを確認してください。
+                    </div>
+                  ) : (
+                    <>
+                      <div
+                        style={{
+                          fontSize: 12,
+                          fontWeight: 800,
+                          marginBottom: 6,
+                        }}
+                      >
+                        特化係数の対象（分子）
+                      </div>
+                      <select
+                        value={analysisPopMetric}
+                        onChange={(e) =>
+                          setAnalysisPopMetric(e.target.value)
+                        }
+                        style={selectStyle}
+                      >
+                        {popAnalysisMetricOptions.map((opt) => (
+                          <option key={opt.id} value={opt.column}>
+                            {opt.label}
+                          </option>
+                        ))}
+                      </select>
+                      <div
+                        style={{ marginTop: 8, fontSize: 12, opacity: 0.85 }}
+                      >
+                        分母は「総数」列。表示中の全地域平均比率に対する各地域比率の倍率を表示します。
+                      </div>
+                      <div
+                        style={{ marginTop: 10, fontSize: 12, opacity: 0.75 }}
+                      >
+                        ※人口CSVの（再掲）15歳未満 / 65歳以上列を優先的に使用します。
                       </div>
                     </>
                   )}
@@ -5545,7 +5689,7 @@ export default function App() {
             mode={mode}
             min={valueStats.min}
             max={valueStats.max}
-            midLabel={mode === 'analysis' ? '1.0' : null}
+            midLabel={isAnalysisMode ? '1.0' : null}
             layout={legendLayout}
           />
         )}
