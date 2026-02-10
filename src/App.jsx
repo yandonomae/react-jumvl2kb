@@ -1184,6 +1184,11 @@ function downloadCsv(content, filename) {
   URL.revokeObjectURL(url);
 }
 
+function sanitizeCsvFilename(name) {
+  const base = String(name ?? '').trim() || 'export';
+  return base.replace(/[\\/:*?"<>|]/g, '_');
+}
+
 function buildCompositeKeyFromRow(row, areaCodeLengths, shapeKeySet) {
   const lengths = areaCodeLengths?.length ? areaCodeLengths : null;
 
@@ -1791,6 +1796,10 @@ export default function App() {
     }
     return map;
   }, [stations]);
+  const stationById = useMemo(
+    () => new Map(stations.map((station) => [station.id, station])),
+    [stations]
+  );
   const activeCityCodes = useMemo(() => {
     const available = getCityCodesFromGeojson(shapeGeo);
     if (!available.length) return [];
@@ -3394,6 +3403,112 @@ export default function App() {
     );
   };
 
+  const collectCatchmentRestaurants = (center) =>
+    restaurantPoints.filter((point) => {
+      if (!Number.isFinite(point.lat) || !Number.isFinite(point.lon)) {
+        return false;
+      }
+      const distance = haversineMeters(
+        center.lat,
+        center.lon,
+        point.lat,
+        point.lon
+      );
+      return distance <= STATION_CATCHMENT_METERS;
+    });
+
+  const buildCatchmentCsvContent = ({
+    title,
+    ridershipValue,
+    stats,
+    includeCategoryCounts,
+    restaurants,
+  }) => {
+    const count = stats?.count ?? 0;
+    const commentTotal = stats?.commentTotal ?? 0;
+    const bookmarkTotal = stats?.bookmarkTotal ?? 0;
+    const avgRating = stats?.avgRating ?? null;
+    const avgComments = count ? commentTotal / count : null;
+    const avgBookmarks = count ? bookmarkTotal / count : null;
+    const avgLunchBudget = stats?.avgLunchBudget ?? null;
+    const avgNightBudget = stats?.avgNightBudget ?? null;
+    const topCategories = stats?.topCategories ?? [];
+
+    const formatCategory = (item) => {
+      if (!item?.name) return '-';
+      if (includeCategoryCounts && Number.isFinite(item.count)) {
+        return `${item.name} (${item.count})`;
+      }
+      return item.name;
+    };
+
+    const rows = [
+      { A: '駅(点)の名前', B: title },
+      { A: '乗降客数', B: ridershipValue },
+      { A: '飲食店数', B: formatNumber(count) },
+      { A: '平均評価', B: formatDecimal(avgRating, 2) },
+      { A: 'コメント合計', B: formatNumber(commentTotal) },
+      { A: '一店舗あたりコメント平均', B: formatDecimal(avgComments, 2) },
+      { A: 'ブックマーク合計', B: formatNumber(bookmarkTotal) },
+      {
+        A: '一店舗あたりブックマーク平均',
+        B: formatDecimal(avgBookmarks, 2),
+      },
+      { A: '平均昼予算', B: formatDecimal(avgLunchBudget, 1) },
+      { A: '平均夜予算', B: formatDecimal(avgNightBudget, 1) },
+      { A: '頻出カテゴリ1位', B: formatCategory(topCategories[0]) },
+      { A: '頻出カテゴリ2位', B: formatCategory(topCategories[1]) },
+      { A: '頻出カテゴリ3位', B: formatCategory(topCategories[2]) },
+      { A: '頻出カテゴリ4位', B: formatCategory(topCategories[3]) },
+      { A: '頻出カテゴリ5位', B: formatCategory(topCategories[4]) },
+      { A: '', B: '' },
+      { A: '店舗名', B: '住所' },
+      ...restaurants.map((restaurant) => ({
+        A: restaurant.name,
+        B: restaurant.address ?? '',
+      })),
+    ];
+
+    return buildCsvContent(rows, ['A', 'B']);
+  };
+
+  const handleStationCatchmentDownload = (stationId) => {
+    const station = stationById.get(stationId);
+    if (!station) return;
+    const stats = stationStats.get(stationId);
+    const restaurants = collectCatchmentRestaurants({
+      lat: station.lat,
+      lon: station.lon,
+    });
+    const content = buildCatchmentCsvContent({
+      title: station.name,
+      ridershipValue: formatNumber(RIDERSHIP_BY_STATION_ID[stationId]),
+      stats,
+      includeCategoryCounts: false,
+      restaurants,
+    });
+    const filename = `${sanitizeCsvFilename(station.name)}.csv`;
+    downloadCsv(content, filename);
+  };
+
+  const handleCustomPointCatchmentDownload = (point) => {
+    if (!point) return;
+    const stats = customPointStats.get(point.id);
+    const restaurants = collectCatchmentRestaurants({
+      lat: point.lat,
+      lon: point.lon,
+    });
+    const content = buildCatchmentCsvContent({
+      title: point.label,
+      ridershipValue: '-',
+      stats,
+      includeCategoryCounts: true,
+      restaurants,
+    });
+    const filename = `${sanitizeCsvFilename(point.label)}.csv`;
+    downloadCsv(content, filename);
+  };
+
   const handleStationSummaryDownload = () => {
     if (!stationSummaryRows.length) return;
     const columns = [
@@ -4275,6 +4390,24 @@ export default function App() {
                   <div style={{ padding: '8px 10px', whiteSpace: 'pre-line' }}>
                     {popupText}
                   </div>
+                  <div
+                    style={{
+                      padding: '0 10px 10px',
+                      display: 'flex',
+                      justifyContent: 'flex-end',
+                    }}
+                  >
+                    <button
+                      type="button"
+                      style={btnStyle}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleStationCatchmentDownload(id);
+                      }}
+                    >
+                      CSVを出力
+                    </button>
+                  </div>
                 </div>
               );
             })}
@@ -4401,9 +4534,21 @@ export default function App() {
                     style={{
                       padding: '0 10px 10px',
                       display: 'flex',
-                      justifyContent: 'flex-end',
+                      flexDirection: 'column',
+                      alignItems: 'flex-end',
+                      gap: 6,
                     }}
                   >
+                    <button
+                      type="button"
+                      style={btnStyle}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleCustomPointCatchmentDownload(point);
+                      }}
+                    >
+                      CSVを出力
+                    </button>
                     <button
                       type="button"
                       style={{
