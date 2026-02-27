@@ -685,8 +685,8 @@ const DEFAULT_DATA_FILES = {
     resolvePublicUrl('data/吹田_地図/r2ka27205'),
     resolvePublicUrl('data/豊中_地図/r2ka27203'),
   ],
-  populationCsv: resolvePublicUrl('data/h03_27(大阪全域_人口).csv'),
-  householdCsv: resolvePublicUrl('data/h06_01_27(大阪全域_世帯).csv'),
+  populationCsv: resolvePublicUrl('data/h03_27(茨木_人口).csv'),
+  householdCsv: resolvePublicUrl('data/h06_01_27(茨木_世帯).csv'),
   restaurantSuitaCsv: resolvePublicUrl('data/飲食店_吹田.csv'),
   restaurantToyonakaCsv: resolvePublicUrl('data/飲食店_豊中.csv'),
   restaurantSuitaGeoCsv: resolvePublicUrl('data/飲食店_吹田_緯度経度付き.csv'),
@@ -4740,8 +4740,8 @@ export default function App() {
                     市境:
                     {boundaryUrl ? ` /${boundaryUrl}` : ' (読み込み中)'}
                   </li>
-                  <li>人口: h03_27(大阪全域_人口).csv（大阪全域）</li>
-                  <li>世帯: h06_01_27(大阪全域_世帯).csv（大阪全域）</li>
+                  <li>人口: h03_27(茨木_人口).csv</li>
+                  <li>世帯: h06_01_27(茨木_世帯).csv</li>
                   <li>
                     飲食店: 飲食店_吹田_緯度経度付き.csv / 飲食店_豊中_緯度経度付き.csv
                   </li>
